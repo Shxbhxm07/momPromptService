@@ -93,12 +93,22 @@ unreachable; 500 the job failed. The body is always the ack.
 
 ## Status (2026-09-14)
 
-- Built and tested **locally only**, inside the `offline-mom-api:latest` image (same dependencies):
-  all outcomes with MinIO/Elastic faked, plus the live server with Kafka and Elastic unreachable.
+- **Full end-to-end run on 2026-09-14, everything real**, through `docker compose up -d` in this
+  repo: a 7,211-character meeting transcript (.txt) in MinIO + a prompt, produced on
+  `mom-prompt.jobs` in Kafka UI. SUCCESS in **239 s**. The ack carried `path` filled with
+  `mom/test/summaries/<md5>.docx` and every backend field returned with its original value and JSON
+  type. The .docx (41 KB, 3 tables) opened with the JSSD layout — numbered paragraphs, "The
+  following were present:-", a numbered agenda. Elasticsearch `mom-attached/momp-002` held 6
+  attendees, 7 agenda items, 18 key points, 8 decisions and 8 action items, which is right for a
+  county-commission transcript full of motions and votes.
+- Also tested inside the `offline-mom-api:latest` image: all outcomes with MinIO/Elastic faked,
+  plus the live server with Kafka and Elastic unreachable.
 - One **real** run through the local llama-service (OpenRouter, Llama 3.3 70B), on
   `~/offline-mom-api/Meeting 2026-07-21 09_51 UTC_report.pdf` plus a prompt: SUCCESS in 198 s. Title, date, all 5
   agenda items and the key points matched the PDF; the prompt did not leak into the minutes; decisions
   and action items were empty, which is right for that source (a one-speaker talk).
+- Local Kafka, MinIO and Elasticsearch are this repo's own (`docker-compose.yml`), on network
+  `mom-prompt_default`. Nothing is shared with `~/offline-mom-api` any more.
 - The Kafka message is **identical to the audio service's** (`mom.jobs`): same fields in, same ack out.
   Only `file_urls` points at a document instead of an .mp3, and `prompt` may be added. Confirmed by
   parsing the audio service's own example message here. Topics stay separate (`mom-prompt.*`) so an
@@ -170,6 +180,18 @@ unreachable; 500 the job failed. The body is always the ack.
   in chat before; they belong in OpenShift Secrets. Do not send the user's email to any service.
 
 ## Testing locally
+
+`docker compose up -d` is the whole environment: this service, MinIO, Elasticsearch, Kafka, Kafka UI
+and a minutes writer, on their own network (`mom-prompt_default`), with nothing borrowed from
+`~/offline-mom-api`. The key goes in `.env` (gitignored; `cp .env.example .env`), never in a
+committed file. Ports: service 8010, llama 8011, Kafka UI 8090, MinIO 9000/9001, Elastic 9200,
+Kafka 29092.
+
+llama-service is the one image not built here, deliberately: on the cluster ONE Deployment serves
+this service, mom-consumer and translate-consumer, so it is shared infrastructure like MinIO, not
+part of any of their repos. `LLAMA_URL` + `--scale llama=0` points at an existing one instead.
+
+### The older way, mounting into the audio image
 
 The `offline-mom-api:latest` image has every dependency (tesseract, LibreOffice, minio, elasticsearch,
 kafka-python), so mount this folder into it:

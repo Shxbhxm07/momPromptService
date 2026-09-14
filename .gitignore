@@ -21,6 +21,8 @@ venv/
 !docs/**/*.pdf
 out/
 *_report.docx
+# samples/ is the exception: small text fixtures for testing are source, not output.
+!samples/*.txt
 
 # ── editor / OS ──────────────────────────────────────────────────────────────
 .DS_Store

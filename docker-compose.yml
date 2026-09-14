@@ -1,0 +1,194 @@
+# The whole local test environment for this service, in this repo.
+#
+#   docker compose up -d
+#
+# Nothing here reaches into another project: its own network, its own MinIO, Elasticsearch,
+# Kafka and Kafka UI, its own .env. The cluster's equivalents live in project `teamsync`
+# (MinIO, Elasticsearch, Kafka) and `trino` (llama-service) and are pointed at by the same
+# environment variable names, so a setting proved here means the same thing there.
+#
+# ABOUT llama-service. It is shared infrastructure, not part of this service: on the cluster
+# ONE Deployment answers mom-consumer, translate-consumer and this one. So it is used here the
+# way minio and kafka are — a prebuilt image, pointed at by URL, with no source in this repo.
+# To use an llama-service that is already running instead of starting another, set LLAMA_URL in
+# .env and skip this one:  docker compose up -d --scale llama=0
+
+name: mom-prompt
+
+services:
+
+  # ── the service under test ───────────────────────────────────────────────────
+  mom-prompt-service:
+    build: .
+    image: mom-prompt-service:local
+    container_name: momp-service
+    depends_on:
+      minio-init:      {condition: service_completed_successfully}
+      kafka-init:      {condition: service_completed_successfully}
+      elasticsearch:   {condition: service_healthy}
+    environment:
+      ENABLE_KAFKA: "true"
+      JOB_KIND: prompt
+      # Defaults to this project's own llama container; override in .env to use another.
+      LLAMA_URL: ${LLAMA_URL:-http://momp-llama:8001}
+      KAFKA_BOOTSTRAP: momp-kafka:9092
+      KAFKA_JOB_TOPIC: mom-prompt.jobs
+      KAFKA_ACK_TOPIC: mom-prompt.acks
+      KAFKA_GROUP_ID: mom-prompt-consumer
+      MINIO_ENDPOINT: momp-minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+      MINIO_SUMMARY_BUCKET: ${MINIO_BUCKET:-mom}
+      ELASTIC_URL: http://momp-elastic:9200
+      ELASTIC_INDEX_ATTACHED: mom-attached
+    ports:
+      - "${SERVICE_PORT:-8010}:8000"
+    restart: unless-stopped
+
+  # ── the minutes writer ───────────────────────────────────────────────────────
+  # Prebuilt image, run in ONLINE mode (OpenRouter). The variable is named for Groq for
+  # historical reasons; it is just "Authorization: Bearer <key>", which OpenRouter takes too.
+  llama:
+    image: ${LLAMA_IMAGE:-offline-mom-llama:latest}
+    container_name: momp-llama
+    environment:
+      APP_MODE: online
+      VLLM_API_BASE: https://openrouter.ai/api/v1
+      LLM_MODEL_PATH: ${LLM_MODEL:-meta-llama/llama-3.3-70b-instruct}
+      GROQ_API_KEYS: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env — copy .env.example}
+      # Llama emits no reasoning tokens; without this the token budgets collapse.
+      LLM_IS_REASONING: "false"
+      MODEL_CONTEXT_LIMIT: "131072"
+      # Pin one host: unpinned, identical calls land on providers with different quantisation,
+      # so output quality varies for reasons that have nothing to do with this service.
+      LLM_PROVIDER_ORDER: DeepInfra
+      MOM_WINDOW_KEY_POINTS: "true"
+    volumes:
+      # Full dictionary for the term-corrector's over-correction guard. Without it the guard
+      # falls back to a 293-word list and rewrites ordinary words into product names.
+      - /usr/share/dict/american-english:/usr/share/dict/words:ro
+    ports:
+      - "${LLAMA_PORT:-8011}:8001"
+    restart: unless-stopped
+    healthcheck:
+      # "/" is static; /health round-trips to the LLM and would cost a call every 15 s.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/',timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # ── object storage: the documents in, the .docx out ──────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: momp-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: >
+      sh -c "mc alias set local http://momp-minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
+             mc mb --ignore-existing local/${MINIO_BUCKET:-mom} &&
+             echo 'bucket ${MINIO_BUCKET:-mom} ready'"
+    restart: "no"
+
+  # ── the minutes record and the search chunks ─────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.1
+    container_name: momp-elastic
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "${ELASTIC_PORT:-9200}:9200"
+    volumes:
+      - elastic-data:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ── jobs in, acknowledgements out ────────────────────────────────────────────
+  # Single node, KRaft (no ZooKeeper). Two listeners: PLAINTEXT for the other containers,
+  # HOST so a client on your machine can reach it at localhost:29092.
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: momp-kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://momp-kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@momp-kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      CLUSTER_ID: MomPromptLocalCluster1
+    ports:
+      - "${KAFKA_HOST_PORT:-29092}:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server momp-kafka:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  # 1 partition, replication 1 — the same as the cluster's topics, so ordering and the
+  # one-job-at-a-time guarantee behave here exactly as they will there.
+  kafka-init:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: >
+      sh -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server momp-kafka:9092 --create --if-not-exists --topic mom-prompt.jobs --partitions 1 --replication-factor 1 &&
+             /opt/kafka/bin/kafka-topics.sh --bootstrap-server momp-kafka:9092 --create --if-not-exists --topic mom-prompt.acks --partitions 1 --replication-factor 1 &&
+             /opt/kafka/bin/kafka-topics.sh --bootstrap-server momp-kafka:9092 --list"
+    restart: "no"
+
+  # Same UI as the cluster's, so producing a test message is the same clicks.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: momp-kafka-ui
+    depends_on:
+      kafka: {condition: service_healthy}
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: momp-kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    ports:
+      - "${KAFKA_UI_PORT:-8090}:8080"
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+  elastic-data:
+  kafka-data:

@@ -4,8 +4,11 @@ JSSD-format Minutes of Meeting from a prompt and, optionally, a document (PDF, D
 Same Kafka / MinIO / Elasticsearch flow and the same message and acknowledgement as the audio MoM
 service (`~/offline-mom-api/docs/kafka-contract.md`), plus one field: `prompt`.
 
-- **Build:** `docker build -t mom-prompt-service .` from this folder.
-- **Run:** one container; it serves HTTP on 8000 and consumes Kafka in the same process.
+- **Run it all locally:** `cp .env.example .env`, put your OpenRouter key in it, then
+  `docker compose up -d`. That brings up this service plus its own MinIO, Elasticsearch, Kafka,
+  Kafka UI and minutes writer — its own network, nothing shared with another project.
+- **Build only:** `docker build -t mom-prompt-service .` from this folder.
+- **Run only:** one container; it serves HTTP on 8000 and consumes Kafka in the same process.
 - **Kafka:** jobs on `mom-prompt.jobs`, acknowledgements on `mom-prompt.acks` (`KAFKA_JOB_TOPIC`, `KAFKA_ACK_TOPIC`).
 - **HTTP:** `POST /v1/mom-prompt` with the same JSON as a Kafka job returns the acknowledgement. `GET /docs` shows examples.
 - **Needs:** llama-service (`LLAMA_URL`), MinIO (`MINIO_*`), Elasticsearch (`ELASTIC_*`, `CHUNK_INDEX`). All settings are in `app/config.py`.
@@ -38,5 +41,26 @@ deploy/openshift.yaml
 `documents.py`, `docx_export.py` and `minio_client.py` are **byte-identical copies** of files in
 `~/offline-mom-api/api`. They import nothing but `config`, which is what keeps them copyable: when
 one changes there, `cp` it here and nothing else has to be touched.
+
+## Local test environment
+
+`docker compose up -d` gives you, on `localhost`:
+
+| | |
+|---|---|
+| this service | http://localhost:8010/docs |
+| Kafka UI | http://localhost:8090 |
+| MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
+| Elasticsearch | http://localhost:9200 |
+| minutes writer | http://localhost:8011/health |
+
+Topics `mom-prompt.jobs` / `mom-prompt.acks` and the `mom` bucket are created on first start.
+Upload a PDF/DOCX/DOC/TXT to `mom/mom-docs/` in the MinIO console, then produce a job in Kafka UI
+on `mom-prompt.jobs` and read the acknowledgement on `mom-prompt.acks`.
+
+The only thing not built from this repo is the minutes writer image: on the cluster llama-service
+is ONE Deployment shared by this service, mom-consumer and translate-consumer, so it is used here
+the same way minio and kafka are — a prebuilt image reached by URL. To point at one that is already
+running instead, set `LLAMA_URL` in `.env` and start with `docker compose up -d --scale llama=0`.
 
 See `CLAUDE.md` for how it works, its status and what is next.
