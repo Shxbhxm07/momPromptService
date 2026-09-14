@@ -108,10 +108,10 @@ unreachable; 500 the job failed. The body is always the ack.
 
 ## Next steps
 
-1. Push to GitHub. The repo is **initialised and committed locally** on `main`, identity
-   `Shxbhxm07 <claude8@appolosys.com>`, SSH to GitHub already works. It needs an **empty** repo of its own —
-   the user chose a separate repo holding only this service, NOT a folder inside `momTranscriptionService`.
-   Then build this folder's `Dockerfile` in Jenkins (build context = this folder).
+1. Jenkins. The code is on GitHub at **`Shxbhxm07/momPromptService`**, branch `main` (pushed
+   2026-09-14; SSH remote `git@github.com:Shxbhxm07/momPromptService.git`). Its own repo, holding only
+   this service — not a folder inside `momTranscriptionService`. New Jenkins job from that repo,
+   **build context = the repo root**, since `Dockerfile` sits beside `app/`.
 2. Kafka UI: create topics `mom-prompt.jobs` and `mom-prompt.acks` (1 partition, replication 1, like the others).
 3. OCP (trino project): Deployment + Service + Route from `deploy/openshift.yaml`. Env values are the
    same ones mom-consumer uses; passwords from a Secret.
@@ -151,7 +151,10 @@ unreachable; 500 the job failed. The body is always the ack.
   `mom_v1` was created by hand in Kibana with their `e5-teamsync-faq-pipeline`).
 - The audio service's images are built by Jenkins from GitHub `Shxbhxm07/momTranscriptionService`
   (branch main). This service is **not** in that repo; the user asked for it to be separate, and confirmed
-  that again on 2026-09-14 when a merge into it was offered.
+  that again on 2026-09-14 when a merge into it was offered. It lives in `Shxbhxm07/momPromptService`.
+- The layout follows `Amit-K-Jha/transcription-service` (private; the user showed it as a screenshot),
+  which the user picked as the reference: one flat `app/` folder, `Dockerfile` and `requirements.txt`
+  at the repo root.
 - Test messages are produced in **Kafka UI**. Pod logs are in UTC; the user is on IST (UTC+5:30).
 - An OpenShift route cuts a request off at its timeout (30 s by default); ours set 3600 s.
 
@@ -161,8 +164,8 @@ unreachable; 500 the job failed. The body is always the ack.
   console), not CLI commands. Give times in IST.
 - Before a fix: a short pros/cons table, pick one, apply it in one go. One change at a time.
 - They often ask for a one-line Zoho Sprint entry or a Teams update: keep those to one or two lines.
-- Commit and push to GitHub when a piece of work is done; they rebuild from it in Jenkins. (Local repo
-  exists; the GitHub remote is not added yet — see Next steps.)
+- Commit and push to GitHub when a piece of work is done; they rebuild from it in Jenkins.
+  This repo is `Shxbhxm07/momPromptService`, branch `main`; the audio one is `Shxbhxm07/momTranscriptionService`.
 - **Never put credentials in files.** The MinIO and Elastic passwords and the IBM key have been pasted
   in chat before; they belong in OpenShift Secrets. Do not send the user's email to any service.
 
