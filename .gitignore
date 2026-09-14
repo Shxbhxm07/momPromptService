@@ -1,0 +1,32 @@
+# ── secrets ──────────────────────────────────────────────────────────────────
+# MinIO and Elasticsearch credentials and the watsonx key live in OpenShift Secrets,
+# never in this repo. .env is for local runs only and is never committed.
+.env
+*.pem
+*.key
+secrets.env
+
+# ── python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── local data & generated output ────────────────────────────────────────────
+# Test documents and the minutes made from them are inputs/outputs, not source.
+*.pdf
+*.doc
+*.docx
+!docs/**/*.pdf
+out/
+*_report.docx
+
+# ── editor / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# LibreOffice/fontconfig cache, written when .doc is converted during a test — machine-specific.
+**/.cache/
