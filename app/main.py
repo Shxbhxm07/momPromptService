@@ -1,8 +1,8 @@
 """mom-prompt-service: Minutes of Meeting in the JSSD format from a user's prompt and, optionally, a
 document (PDF, DOCX, DOC or TXT). No audio.
 
-Two ways in, one job (job.py):
-  * Kafka: a message on KAFKA_JOB_TOPIC, the acknowledgement on KAFKA_ACK_TOPIC (consumer.py, started here).
+Two ways in, one job (minutes.py):
+  * Kafka: a message on KAFKA_JOB_TOPIC, the acknowledgement on KAFKA_ACK_TOPIC (kafka_consumer.py, started here).
   * HTTP:  POST /v1/mom-prompt with the same JSON; the response body is the same acknowledgement.
 
 The message and the acknowledgement are the audio service's (~/offline-mom-api/docs/kafka-contract.md) plus one field,
@@ -15,14 +15,16 @@ from typing import Any, Dict
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-import consumer
-import job as jobs
+import kafka_consumer
+import logger_config
+import minutes
+import setup
 from config import ENABLE_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC, LLAMA_URL
-from core.kafka_contract import build_ack, parse_job
-from core.mom import MomGenerator
+from kafka_contract import build_ack, parse_job
+from mom import MomGenerator
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger_config.configure()
+logger = logging.getLogger("main")
 
 app = FastAPI(title="MoM from prompt",
               description="Minutes of Meeting in the JSSD format from a prompt and, optionally, a document.")
@@ -31,20 +33,20 @@ app = FastAPI(title="MoM from prompt",
 @app.on_event("startup")
 def _startup():
     if ENABLE_KAFKA:
-        consumer.start()
+        kafka_consumer.start()
     logger.info(f"✓ Ready | job={JOB_KIND} | kafka={'on' if ENABLE_KAFKA else 'off'} "
                 f"| minutes writer {LLAMA_URL}")
 
 
 @app.on_event("shutdown")
 def _shutdown():
-    consumer.stop.set()
+    kafka_consumer.stop.set()
 
 
 @app.get("/")
 def root():
     """Liveness. Static, except that a dead consumer thread fails it, so the pod is restarted."""
-    if ENABLE_KAFKA and not consumer.is_alive():
+    if ENABLE_KAFKA and not kafka_consumer.is_alive():
         return JSONResponse(status_code=503, content={"service": "mom-prompt-service",
                                                       "status": "kafka consumer thread stopped"})
     return {"service": "mom-prompt-service", "status": "ok"}
@@ -54,9 +56,9 @@ def root():
 def health():
     llm_ok = MomGenerator().is_ready()
     return {
-        "status": "healthy" if llm_ok and (consumer.is_alive() or not ENABLE_KAFKA) else "degraded",
+        "status": "healthy" if llm_ok and (kafka_consumer.is_alive() or not ENABLE_KAFKA) else "degraded",
         "minutes_writer": {"url": LLAMA_URL, "reachable": llm_ok},
-        "kafka": {"enabled": ENABLE_KAFKA, "consumer_running": consumer.is_alive(),
+        "kafka": {"enabled": ENABLE_KAFKA, "consumer_running": kafka_consumer.is_alive(),
                   "jobs": KAFKA_JOB_TOPIC, "acks": KAFKA_ACK_TOPIC},
     }
 
@@ -93,10 +95,10 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
         return JSONResponse(status_code=422, content=build_ack(
             job, success=False, description="No prompt and no file_urls: nothing to write minutes from."))
     try:
-        c = jobs.clients()
+        c = setup.clients()
     except Exception as e:
         logger.error(f"[JOB {job.conversation_id}] MinIO / Elasticsearch not ready: {e}")
         return JSONResponse(status_code=503, content=build_ack(
             job, success=False, description=f"Storage not ready — {type(e).__name__}: {e}"))
-    ack = jobs.process(job, c)
+    ack = minutes.process(job, c)
     return JSONResponse(status_code=200 if ack.get("message") == "SUCCESS" else 500, content=ack)

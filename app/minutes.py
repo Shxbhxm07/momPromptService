@@ -7,54 +7,26 @@ the recording replaced by text:
                                               prompt ───────────────┴─▶ llama-service /summarize
     minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/ ─▶ Elasticsearch (record + chunks) ─▶ ack
 
-Both ways in use it: the Kafka consumer (consumer.py) and POST /v1/mom-prompt (main.py).
+Both ways in use it: the Kafka consumer (kafka_consumer.py) and POST /v1/mom-prompt (main.py).
+The clients it needs are built once, on first use, in setup.py.
 """
 import hashlib
 import logging
-import os
-import threading
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-from config import MAX_DOC_MB, MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
-from core.kafka_contract import KafkaJob, build_ack, summary_object_key
-from core.mom import MomGenerator, to_mom_response
-from core.search_index import ChunkIndex, MomIndex
-from core.storage import ObjectStore
-from utils.docx_export import build_mom_docx
-from utils.documents import SUPPORTED_EXTENSIONS, _sniff, extract_text_blocks
+import document_checker
+from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
+from docx_export import build_mom_docx
+from documents import extract_text_blocks
+from kafka_contract import KafkaJob, build_ack, summary_object_key
+from minio_client import ObjectStore
+from mom import to_mom_response
+from setup import Clients
 
-logger = logging.getLogger("job")
+logger = logging.getLogger("minutes")
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-
-@dataclass
-class Clients:
-    store: ObjectStore
-    index: MomIndex
-    chunks: ChunkIndex
-    llm: MomGenerator
-
-
-_clients: Optional[Clients] = None
-_clients_lock = threading.Lock()
-
-
-def clients() -> Clients:
-    """MinIO, Elasticsearch and llama-service clients, made once, on first use.
-
-    Not at startup: an Elasticsearch that is down must not stop the service starting, and the first job
-    to need it reports the problem in its acknowledgement. Raises if the indices cannot be ensured.
-    """
-    global _clients
-    with _clients_lock:
-        if _clients is None:
-            index = MomIndex()
-            index.ensure_indices()
-            _clients = Clients(ObjectStore(), index, ChunkIndex(), MomGenerator())
-        return _clients
 
 
 def compose_source(prompt: str, documents: List[Tuple[str, str]]) -> str:
@@ -84,19 +56,13 @@ def _read_documents(job: KafkaJob, store: ObjectStore) -> List[Tuple[str, str]]:
     for i, path in enumerate(job.file_urls):
         raw = store.download(path)
         name = (job.document_names[i] if i < len(job.document_names) else "") or path.rsplit("/", 1)[-1]
-        size_mb = len(raw) / 1048576
-        if size_mb > MAX_DOC_MB:
-            raise ValueError(f"{name} is {size_mb:.0f} MB; the limit is {MAX_DOC_MB} MB.")
-        # The extractor reads any unrecognised file as plain text (right for a .txt with an odd name).
-        # Here that would turn an image or a spreadsheet into gibberish minutes, so refuse it unless
-        # the name or the file's own magic bytes say PDF, DOCX, DOC or TXT.
-        if os.path.splitext(name)[1].lower() not in SUPPORTED_EXTENSIONS and not _sniff(raw):
-            raise ValueError(f"{name}: unsupported file type. Send PDF, DOCX, DOC or TXT.")
+        document_checker.check(raw, name)
         extraction = extract_text_blocks(raw, name)
         text = "\n\n".join(b for b in extraction.blocks if b.strip())
         if not text.strip():
             logger.warning(f"[JOB {job.conversation_id}] {name}: no text found, even with OCR")
-        logger.info(f"[JOB {job.conversation_id}] read {name} ({size_mb:.1f} MB, {len(text)} chars)")
+        logger.info(f"[JOB {job.conversation_id}] read {name} "
+                    f"({len(raw)/1048576:.1f} MB, {len(text)} chars)")
         documents.append((name, text))
     return documents
 

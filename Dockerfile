@@ -21,9 +21,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py main.py job.py consumer.py ./
-COPY core/ ./core/
-COPY utils/ ./utils/
+# The whole service is one flat package. Its contents land at /app, which is the working directory
+# and therefore already on sys.path, so every module imports its neighbours by plain name
+# (`from config import ...`). That is what keeps docx_export.py, documents.py and minio_client.py
+# BYTE-IDENTICAL to their originals in ~/offline-mom-api/api — they import nothing but `config`,
+# so a change there is copied here with cp and nothing else.
+COPY app/ ./
+
+# /app is already sys.path[0] for `uvicorn main:app` run from here, but not for a script run
+# from anywhere else (a check mounted into /tmp, `docker exec python -c ...`). Setting it
+# explicitly means every way of running the code finds the modules.
+ENV PYTHONPATH=/app
 
 EXPOSE 8000
 

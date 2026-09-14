@@ -32,22 +32,40 @@ copied from mom-consumer whose topics were changed but not its kind.
 
 ## Files
 
+Everything is one flat package in `app/`, the way `Amit-K-Jha/transcription-service` lays out its
+`app/` folder — no `core/` or `utils/` subfolders. `app/` is the working directory in the image, so
+every module imports its neighbours by plain name (`from config import ...`).
+
 | file | what |
 |---|---|
-| `main.py` | FastAPI: `/`, `/health`, `POST /v1/mom-prompt`; starts the consumer thread |
-| `consumer.py` | Kafka loop: one job at a time, paused-partition polling, commit after the ack |
-| `job.py` | the job: read documents, build the text, get minutes, render, store, index, ack |
-| `config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
-| `core/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied unchanged** from `~/offline-mom-api/api/core/mom.py`) |
-| `core/kafka_contract.py` | copied from `~/offline-mom-api/api`, **adapted**: `prompt` field; `path` is a file fallback only when it ends `.pdf/.docx/.doc/.txt`, so `"AsItIs"` is ignored |
-| `core/storage.py` | copied unchanged (MinIO) |
-| `core/search_index.py` | copied, minutes only (translation index removed) |
-| `utils/docx_export.py` | **the JSSD renderer**, copied unchanged |
-| `utils/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied unchanged |
+| `app/main.py` | FastAPI: `/`, `/health`, `POST /v1/mom-prompt`; starts the consumer thread |
+| `app/kafka_consumer.py` | Kafka loop: one job at a time, paused-partition polling, commit after the ack |
+| `app/minutes.py` | the job: read documents, build the text, get minutes, render, store, index, ack |
+| `app/kafka_contract.py` | copied from `~/offline-mom-api/api`, **adapted**: `prompt` field; `path` is a file fallback only when it ends `.pdf/.docx/.doc/.txt`, so `"AsItIs"` is ignored |
+| `app/config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
+| `app/setup.py` | MinIO, Elasticsearch and llama-service clients, made once on first use (not at startup) |
+| `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
+| `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
+| `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
+| `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
+| `app/es_client.py` | copied from `api/core/search_index.py`, minutes only (translation index removed) |
+| `app/docx_export.py` | **the JSSD renderer**, copied **unchanged** from `api/utils/docx_export.py` |
+| `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
+| `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
 | `deploy/openshift.yaml` | Deployment + Service + Route (with the 3600 s timeout), `JOB_KIND=prompt` |
 
 The copied files are copies, not imports, because this service is separate from offline-mom-api. When
-one of them changes in `~/offline-mom-api/api` (especially `docx_export.py`), copy the change here too.
+one of them changes in `~/offline-mom-api/api` (especially `docx_export.py`), copy the change here too:
+
+```
+cp ~/offline-mom-api/api/utils/docx_export.py  app/docx_export.py
+cp ~/offline-mom-api/api/utils/documents.py    app/documents.py
+cp ~/offline-mom-api/api/core/storage.py       app/minio_client.py
+```
+
+Those three are **byte-identical** and stay that way, because they import nothing but `config` —
+which is why flattening the tree cost nothing. `mom.py` and `es_client.py` are adapted (the
+transcript and translation parts removed), so those two need a diff, not a cp.
 
 ## The contract
 
@@ -154,7 +172,7 @@ The `offline-mom-api:latest` image has every dependency (tesseract, LibreOffice,
 kafka-python), so mount this folder into it:
 
 ```bash
-docker run --rm -e PYTHONPATH=/app -e ENABLE_KAFKA=false -v "$PWD:/app" -w /app \
+docker run --rm -e PYTHONPATH=/app -e ENABLE_KAFKA=false -v "$PWD/app:/app" -w /app \
   --entrypoint python offline-mom-api:latest your_check.py
 ```
 

@@ -22,10 +22,11 @@ from kafka.errors import CommitFailedError
 
 from config import (JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_BOOTSTRAP, KAFKA_GROUP_ID, KAFKA_JOB_TOPIC,
                     KAFKA_MAX_POLL_INTERVAL_MS)
-from core.kafka_contract import build_ack, parse_job
-import job as jobs
+from kafka_contract import build_ack, parse_job
+import minutes
+import setup
 
-logger = logging.getLogger("consumer")
+logger = logging.getLogger("kafka_consumer")
 
 stop = threading.Event()
 _thread = None
@@ -61,10 +62,10 @@ def _run_forever():
 
 def _handle(job) -> dict:
     try:
-        c = jobs.clients()
+        c = setup.clients()
     except Exception as e:
         return build_ack(job, success=False, description=f"Storage not ready — {type(e).__name__}: {e}")
-    return jobs.process(job, c)
+    return minutes.process(job, c)
 
 
 def _loop():
