@@ -26,6 +26,10 @@ job.process:  file_urls ─▶ MinIO ─▶ text (PDF text layer; OCR for scanne
 One pod: uvicorn serves HTTP, and `main.py` starts the Kafka consumer as a thread (`ENABLE_KAFKA`).
 `GET /` fails if that thread dies, so the pod gets restarted.
 
+`JOB_KIND` is named after the audio service's (`mom` / `translate`) so the three Deployments read alike.
+Here `prompt` is the only accepted value: anything else refuses to start, which catches a Deployment
+copied from mom-consumer whose topics were changed but not its kind.
+
 ## Files
 
 | file | what |
@@ -40,7 +44,7 @@ One pod: uvicorn serves HTTP, and `main.py` starts the Kafka consumer as a threa
 | `core/search_index.py` | copied, minutes only (translation index removed) |
 | `utils/docx_export.py` | **the JSSD renderer**, copied unchanged |
 | `utils/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied unchanged |
-| `deploy/openshift.yaml` | Deployment + Service + Route (with the 3600 s timeout) |
+| `deploy/openshift.yaml` | Deployment + Service + Route (with the 3600 s timeout), `JOB_KIND=prompt` |
 
 The copied files are copies, not imports, because this service is separate from offline-mom-api. When
 one of them changes in `~/offline-mom-api/api` (especially `docx_export.py`), copy the change here too.
@@ -86,8 +90,10 @@ unreachable; 500 the job failed. The body is always the ack.
 
 ## Next steps
 
-1. Put this folder in a Git repo Jenkins can build from. **It is not in any repo yet**: ask the user which
-   GitHub repo it should go to. Then build this folder's `Dockerfile` in Jenkins (build context = this folder).
+1. Push to GitHub. The repo is **initialised and committed locally** on `main`, identity
+   `Shxbhxm07 <claude8@appolosys.com>`, SSH to GitHub already works. It needs an **empty** repo of its own —
+   the user chose a separate repo holding only this service, NOT a folder inside `momTranscriptionService`.
+   Then build this folder's `Dockerfile` in Jenkins (build context = this folder).
 2. Kafka UI: create topics `mom-prompt.jobs` and `mom-prompt.acks` (1 partition, replication 1, like the others).
 3. OCP (trino project): Deployment + Service + Route from `deploy/openshift.yaml`. Env values are the
    same ones mom-consumer uses; passwords from a Secret.
@@ -126,7 +132,8 @@ unreachable; 500 the job failed. The body is always the ack.
   (bucket `mom`), `elasticsearch-service.teamsync.svc.cluster.local:9200` (single node, so replicas 0;
   `mom_v1` was created by hand in Kibana with their `e5-teamsync-faq-pipeline`).
 - The audio service's images are built by Jenkins from GitHub `Shxbhxm07/momTranscriptionService`
-  (branch main). This service is **not** in that repo; the user asked for it to be separate.
+  (branch main). This service is **not** in that repo; the user asked for it to be separate, and confirmed
+  that again on 2026-09-14 when a merge into it was offered.
 - Test messages are produced in **Kafka UI**. Pod logs are in UTC; the user is on IST (UTC+5:30).
 - An OpenShift route cuts a request off at its timeout (30 s by default); ours set 3600 s.
 
@@ -136,8 +143,8 @@ unreachable; 500 the job failed. The body is always the ack.
   console), not CLI commands. Give times in IST.
 - Before a fix: a short pros/cons table, pick one, apply it in one go. One change at a time.
 - They often ask for a one-line Zoho Sprint entry or a Teams update: keep those to one or two lines.
-- Commit and push to GitHub when a piece of work is done; they rebuild from it in Jenkins. (This folder has
-  no repo yet; see Next steps.)
+- Commit and push to GitHub when a piece of work is done; they rebuild from it in Jenkins. (Local repo
+  exists; the GitHub remote is not added yet — see Next steps.)
 - **Never put credentials in files.** The MinIO and Elastic passwords and the IBM key have been pasted
   in chat before; they belong in OpenShift Secrets. Do not send the user's email to any service.
 
