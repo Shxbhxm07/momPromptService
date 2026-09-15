@@ -53,7 +53,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
 | `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
 | `llama/` | **this service's own minutes writer**, vendored whole from `~/offline-mom-api/llama-service` on 2026-09-15. Its own image, its own Deployment. See below |
-| `deploy/openshift.yaml` | 5 manifests: both Deployments, both Services, the Route (3600 s timeout) |
+| `deploy/openshift/01-secret.yaml` … `04-route.yaml` | **the deployment, in apply order** — Secret, both Deployments, both Services, the Route (3600 s timeout). Env values inline, copy-paste ready for DevOps |
 | `docker-compose.yml`, `.env.example` | the whole local test environment, built from this repo alone |
 
 ### Why `llama/` is here
@@ -195,6 +195,15 @@ unreachable; 500 the job failed. The body is always the ack.
   blank template. Two services, 32 environment variables; every value cross-checked against
   `deploy/openshift.yaml` (30 settings, all agree). Secrets are marked and never written into it.
   Still open in it: **Owner Team** and **WATSONX_PROJECT_ID**.
+- **Deployment YAML split for DevOps, 2026-09-15**: `deploy/openshift.yaml` became four numbered
+  files in `deploy/openshift/`, applied in order (01 Secret, 02 both Deployments, 03 both Services,
+  04 Route), env values inline so they paste straight into the OCP console. Settings are identical to
+  the single file they replace, which was cross-checked against the onboarding form. Validated with
+  kubeconform in strict mode against the Kubernetes and OpenShift 4.15 schemas — 6 resources, 6
+  valid — plus 22 cross-file checks: every secretKeyRef names a key the Secret has, every Secret key
+  is used, each Service selects exactly one Deployment on a port it opens, `LLAMA_URL` resolves to
+  the llama Service, and the Route reaches the service port. Placeholders DevOps must fill:
+  `CHANGE_ME_REGISTRY` (both images), `CHANGE_ME` (six Secret values, `WATSONX_PROJECT_ID`).
 - **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on watsonx.
 
 ## Next steps
@@ -204,7 +213,7 @@ unreachable; 500 the job failed. The body is always the ack.
    this service — not a folder inside `momTranscriptionService`. New Jenkins job from that repo,
    **build context = the repo root**, since `Dockerfile` sits beside `app/`.
 2. Kafka UI: create topics `mom-prompt.jobs` and `mom-prompt.acks` (1 partition, replication 1, like the others).
-3. OCP (trino project): Deployment + Service + Route from `deploy/openshift.yaml`. Env values are the
+3. OCP (trino project): apply `deploy/openshift/01-secret.yaml` → `02-deployment.yaml` → `03-service.yaml` → `04-route.yaml`, in that order. Env values are the
    same ones mom-consumer uses; passwords from a Secret.
 4. Test: upload a PDF to MinIO `mom/mom-docs/`, produce a message on `mom-prompt.jobs` (example below),
    check the ack, the .docx in MinIO, and `GET mom-attached/_doc/<conversationId>` in Kibana.

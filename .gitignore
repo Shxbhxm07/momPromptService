@@ -27,6 +27,9 @@ out/
 !templates/*.docx
 
 # ── editor / OS ──────────────────────────────────────────────────────────────
+# LibreOffice / Microsoft Office lock files, created while a document is open.
+.~lock.*#
+~$*
 .DS_Store
 .idea/
 .vscode/

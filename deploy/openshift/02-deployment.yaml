@@ -1,0 +1,181 @@
+# 02 — Two deployments. Apply 01-secret.yaml first.
+# Replace CHANGE_ME_REGISTRY (both images) and CHANGE_ME (WATSONX_PROJECT_ID) before applying.
+#
+# Before the first deploy, create these Kafka topics (1 partition, replication 1):
+#   mom-prompt.jobs
+#   mom-prompt.acks
+---
+# mom-prompt-llama — this service's own minutes writer (Llama 3.3 70B on IBM watsonx).
+# Built from the repo's llama/ folder. Internal only: no route.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mom-prompt-llama
+  namespace: trino
+  labels:
+    app: mom-prompt-llama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mom-prompt-llama
+  template:
+    metadata:
+      labels:
+        app: mom-prompt-llama
+    spec:
+      containers:
+        - name: mom-prompt-llama
+          image: CHANGE_ME_REGISTRY/mom-prompt-llama:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          env:
+            - name: APP_MODE
+              value: "online"
+            - name: VLLM_API_BASE
+              value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/ml/v1/text/chat?version=2023-05-29"
+            - name: LLM_MODEL_PATH
+              value: "meta-llama/llama-3-3-70b-instruct"
+            - name: WATSONX_PROJECT_ID
+              value: "CHANGE_ME"
+            - name: LLM_AUTH_MODE
+              value: "cp4d"
+            - name: CP4D_AUTH_URL
+              value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/icp4d-api/v1/authorize"
+            - name: LLM_VERIFY_SSL
+              value: "false"
+            - name: LLM_PROVIDER_ORDER
+              value: ""
+            - name: LLM_IS_REASONING
+              value: "false"
+            - name: MODEL_CONTEXT_LIMIT
+              value: "32768"
+            - name: LLM_CONCURRENCY
+              value: "2"
+            - name: MOM_WINDOW_KEY_POINTS
+              value: "true"
+            - name: CP4D_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: CP4D_USERNAME
+            - name: CP4D_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: CP4D_API_KEY
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+# mom-prompt-service — HTTP API + Kafka consumer in one pod.
+# Built from the repo root. One replica only: a second would join the same Kafka group and sit idle.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mom-prompt-service
+  namespace: trino
+  labels:
+    app: mom-prompt-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mom-prompt-service
+  template:
+    metadata:
+      labels:
+        app: mom-prompt-service
+    spec:
+      terminationGracePeriodSeconds: 3600
+      containers:
+        - name: mom-prompt-service
+          image: CHANGE_ME_REGISTRY/mom-prompt-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: LLAMA_URL
+              value: "http://mom-prompt-llama:8001"
+            - name: JOB_KIND
+              value: "prompt"
+            - name: ENABLE_KAFKA
+              value: "true"
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka-service.teamsync.svc.cluster.local:9092"
+            - name: KAFKA_JOB_TOPIC
+              value: "mom-prompt.jobs"
+            - name: KAFKA_ACK_TOPIC
+              value: "mom-prompt.acks"
+            - name: KAFKA_GROUP_ID
+              value: "mom-prompt-consumer"
+            - name: MINIO_ENDPOINT
+              value: "minio-service.teamsync.svc.cluster.local:9000"
+            - name: MINIO_SECURE
+              value: "false"
+            - name: MINIO_SUMMARY_BUCKET
+              value: "mom"
+            - name: ELASTIC_URL
+              value: "http://elasticsearch-service.teamsync.svc.cluster.local:9200"
+            - name: ELASTIC_INDEX_ATTACHED
+              value: "mom-attached"
+            - name: ENABLE_CHUNK_INDEX
+              value: "true"
+            - name: CHUNK_INDEX
+              value: "mom_v1"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: MINIO_SECRET_KEY
+            - name: ELASTIC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: ELASTIC_USER
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mom-prompt-secrets
+                  key: ELASTIC_PASSWORD
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

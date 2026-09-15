@@ -1,0 +1,20 @@
+# 04 — Route for the HTTP endpoint (POST /v1/mom-prompt).
+# The 3600s timeout is required: a job keeps the request open until the minutes are written,
+# and the router default of 30s would cut it off. Only mom-prompt-service gets a route.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mom-prompt-service
+  namespace: trino
+  labels:
+    app: mom-prompt-service
+  annotations:
+    haproxy.router.openshift.io/timeout: 3600s
+spec:
+  to:
+    kind: Service
+    name: mom-prompt-service
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge
