@@ -70,16 +70,22 @@ spec:
         image: <registry>/<repo>:mom-prompt-llama     # built from this repo's llama/ folder
         ports: [{containerPort: 8001}]
         env:
-        # watsonx on Cloud Pak for Data, the same values the shared llama-service uses. See
-        # ~/offline-mom-api/docs/ibm-watsonx.md; the URL is given COMPLETE, including ?version=.
+        # IBM watsonx on Cloud Pak for Data — the values both cluster overlays of the audio service
+        # deploy (~/offline-mom-api/deploy/openshift/overlays/*/offline-mom.env). The URL is given
+        # COMPLETE, including ?version=; its path picks the request shape.
         - {name: APP_MODE, value: online}
-        - {name: VLLM_API_BASE, value: "<watsonx host>/ml/v1/text/chat?version=2023-05-29"}
-        - {name: LLM_MODEL_PATH, value: "ibm/granite-4-h-small"}
+        - {name: VLLM_API_BASE, value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/ml/v1/text/chat?version=2023-05-29"}
+        - {name: LLM_MODEL_PATH, value: "meta-llama/llama-3-3-70b-instruct"}   # Llama 3.3 70B
         - {name: WATSONX_PROJECT_ID, value: "<project id>"}
         - {name: LLM_AUTH_MODE, value: cp4d}
-        - {name: CP4D_AUTH_URL, value: "<cp4d host>/icp4d-api/v1/authorize"}
+        - {name: CP4D_AUTH_URL, value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/icp4d-api/v1/authorize"}
         - {name: LLM_VERIFY_SSL, value: "false"}      # self-signed cluster certificate
         - {name: LLM_PROVIDER_ORDER, value: ""}       # OpenRouter-only setting; empty on watsonx
+        # Llama emits no reasoning tokens. Stated rather than left to the model-name check, because
+        # the output budgets key on it.
+        - {name: LLM_IS_REASONING, value: "false"}
+        - {name: MODEL_CONTEXT_LIMIT, value: "32768"} # the tested value in the cluster overlays
+        - {name: LLM_CONCURRENCY, value: "2"}
         - {name: MOM_WINDOW_KEY_POINTS, value: "true"}
         - {name: CP4D_USERNAME, valueFrom: {secretKeyRef: {name: <secret>, key: CP4D_USERNAME}}}
         - {name: CP4D_API_KEY, valueFrom: {secretKeyRef: {name: <secret>, key: CP4D_API_KEY}}}

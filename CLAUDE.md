@@ -184,8 +184,18 @@ unreachable; 500 the job failed. The body is always the ack.
 - **Kafka messages are lost on `docker compose down`** — known, not yet fixed. `docker-compose.yml`
   mounts `/var/lib/kafka/data`, but apache/kafka writes to `/tmp/kafka-logs`. MinIO and
   Elasticsearch persist correctly.
-- **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on
-  watsonx (the cluster's model, `ibm/granite-4-h-small`).
+- **Cluster model corrected 2026-09-15: Llama 3.3 70B, not Granite.** This file used to say the
+  cluster ran `ibm/granite-4-h-small`, and `deploy/openshift.yaml` had copied that. Both cluster
+  overlays of the audio service (`~/offline-mom-api/deploy/openshift/overlays/*/offline-mom.env`)
+  actually deploy `meta-llama/llama-3-3-70b-instruct` on **Cloud Pak for Data** (`LLM_AUTH_MODE=cp4d`,
+  `https://cpd-watsonx-imir.apps.ocp4.iaf.in`, `LLM_VERIFY_SSL=false`, `MODEL_CONTEXT_LIMIT=32768`),
+  and the user wants Llama 70B. The yaml now matches. Note the audio service's filled onboarding form
+  says IBM Cloud / `iam` — that form is older and wrong on this point; the overlays are what is applied.
+- **Onboarding form filled**: `deploy/Service_Onboarding_Form_mom-prompt-service.xlsx`, from the
+  blank template. Two services, 32 environment variables; every value cross-checked against
+  `deploy/openshift.yaml` (30 settings, all agree). Secrets are marked and never written into it.
+  Still open in it: **Owner Team** and **WATSONX_PROJECT_ID**.
+- **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on watsonx.
 
 ## Next steps
 
