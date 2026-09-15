@@ -1,0 +1,39 @@
+{
+  "tenant_id": "test",
+  "conversationId": "test-002",
+  "document_ids": ["test-002"],
+  "accessVar": "tester<>example.com",
+  "userId": "tester@example.com",
+  "isUser": true,
+  "prompt": "Prepare the minutes of this meeting. Record the main points of discussion, the decisions taken, and who is responsible for each action.",
+  "file_urls": ["mom/mom-docs/your-file.txt"],
+  "document_names": ["your-file.txt"],
+  "mom_meta": {
+    "classification": "CONFIDENTIAL",
+    "precedence": "PRIORITY",
+    "copy_no": "2/7",
+    "telephone": "011-00000000",
+    "address": ["Specimen Headquarters", "Test Block, Sample Road", "New Delhi 110001"],
+    "file_ref": "SPECIMEN/0001/MoM",
+    "issue_date": "2026-09-15",
+    "venue": "Conference Room, Specimen HQ",
+    "meeting_date": "2026-09-12",
+    "meeting_time": "10:30",
+    "secretary": {"name": "SK Rao", "rank": "Maj"},
+    "amendments_by": "2026-09-25",
+    "distribution": [
+      {"addressee": "Sample Addressee 1", "copies": "One", "copy_no": "1", "remarks": "By hand"},
+      {"addressee": "Director Finance", "copies": "One", "copy_no": "2", "remarks": "By hand"}
+    ],
+    "draft": false
+  },
+  "metaData": "{}",
+  "uploadType": "",
+  "grading": "",
+  "data": null,
+  "themes": "",
+  "path": "",
+  "user": true,
+  "clientSessionId": "sess-1",
+  "queryId": "q-1"
+}

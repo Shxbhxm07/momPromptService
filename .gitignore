@@ -23,6 +23,8 @@ out/
 *_report.docx
 # samples/ is the exception: small text fixtures for testing are source, not output.
 !samples/*.txt
+# templates/ is the test pack handed to the testing team: the specimen minutes are deliverables.
+!templates/*.docx
 
 # ── editor / OS ──────────────────────────────────────────────────────────────
 .DS_Store

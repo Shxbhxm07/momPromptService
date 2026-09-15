@@ -1,0 +1,109 @@
+{
+  "mom": {
+    "title": "Specimen Procurement Review",
+    "summary": "The Specimen Procurement Review was held to take stock of the revised procurement guidelines, the delayed server refresh, the stationery contract and vendor performance.",
+    "attendees": [
+      {
+        "name": "Brig AK Sharma",
+        "role": "Director Finance, Chairman"
+      },
+      {
+        "name": "Col RS Mehta",
+        "role": "Head of IT"
+      },
+      {
+        "name": "Col PK Nair",
+        "role": "Head of Administration"
+      },
+      {
+        "name": "Lt Col S Iyer",
+        "role": "Head of Procurement"
+      },
+      {
+        "name": "Maj SK Rao",
+        "role": "Deputy Director Finance, Secretary"
+      }
+    ],
+    "agenda": [
+      "Revised procurement guidelines",
+      "Server refresh",
+      "Stationery contract",
+      "Vendor performance"
+    ],
+    "key_points": [
+      "The Ministry has issued revised procurement guidelines, effective from the next financial year.",
+      "Every purchase above five lakh rupees now requires competitive bidding with at least three qualified vendors.",
+      "The server refresh has slipped by six weeks because two of the three shortlisted vendors withdrew.",
+      "The annual stationery contract expires in November.",
+      "Two vendors were rated below threshold in the performance report."
+    ],
+    "decisions": [
+      "The server tender will be re-floated with a wider eligibility band.",
+      "The existing stationery contract will be extended by three months rather than rushing a fresh tender."
+    ],
+    "action_items": [
+      {
+        "task": "Re-float the server tender with a wider eligibility band",
+        "assigned_to": "Hd IT",
+        "due": "2026-09-30"
+      },
+      {
+        "task": "Extend the stationery contract by three months",
+        "assigned_to": "Hd Adm",
+        "due": "2026-10-15"
+      },
+      {
+        "task": "Issue show-cause notices to the two underperforming vendors",
+        "assigned_to": "Hd Proc",
+        "due": "2026-09-29"
+      }
+    ],
+    "key_figures": [
+      "Competitive bidding threshold: five lakh rupees",
+      "Minimum qualified vendors: three",
+      "Server refresh delay: six weeks"
+    ]
+  },
+  "mom_meta": {
+    "classification": "CONFIDENTIAL",
+    "precedence": "PRIORITY",
+    "copy_no": "2/7",
+    "telephone": "011-00000000",
+    "address": [
+      "Specimen Headquarters",
+      "Test Block, Sample Road",
+      "New Delhi 110001"
+    ],
+    "file_ref": "SPECIMEN/0001/MoM",
+    "issue_date": "2026-09-15",
+    "venue": "Conference Room, Specimen HQ",
+    "meeting_date": "2026-09-12",
+    "meeting_time": "10:30",
+    "secretary": {
+      "name": "SK Rao",
+      "rank": "Maj"
+    },
+    "amendments_by": "2026-09-25",
+    "distribution": [
+      {
+        "addressee": "Sample Addressee 1",
+        "copies": "One",
+        "copy_no": "1",
+        "remarks": "By hand"
+      },
+      {
+        "addressee": "Director Finance",
+        "copies": "One",
+        "copy_no": "2",
+        "remarks": "By hand"
+      },
+      {
+        "addressee": "Head of IT",
+        "copies": "One",
+        "copy_no": "3",
+        "remarks": "By SDS"
+      }
+    ],
+    "draft": false
+  }
+}

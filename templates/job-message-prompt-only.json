@@ -1,0 +1,15 @@
+{
+  "tenant_id": "test",
+  "conversationId": "test-003",
+  "document_ids": ["test-003"],
+  "prompt": "Minutes of the Specimen Procurement Review held on 12 September 2026 at 1030 hours in the Conference Room, chaired by the Director Finance and attended by the Heads of IT, Administration and Procurement. Purchases above five lakh rupees now need competitive bidding with at least three vendors. The server tender will be re-floated by 30 September. The stationery contract will be extended by three months. Show-cause notices go to two underperforming vendors, replies due in fifteen days.",
+  "metaData": "{}",
+  "uploadType": "",
+  "grading": "",
+  "data": null,
+  "themes": "",
+  "path": "",
+  "user": true,
+  "clientSessionId": "sess-1",
+  "queryId": "q-1"
+}

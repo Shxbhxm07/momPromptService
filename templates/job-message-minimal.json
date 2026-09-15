@@ -1,0 +1,17 @@
+{
+  "tenant_id": "test",
+  "conversationId": "test-001",
+  "document_ids": ["test-001"],
+  "prompt": "Prepare the minutes of this meeting. Record the main points of discussion, the decisions taken, and who is responsible for each action.",
+  "file_urls": ["mom/mom-docs/your-file.txt"],
+  "document_names": ["your-file.txt"],
+  "metaData": "{}",
+  "uploadType": "",
+  "grading": "",
+  "data": null,
+  "themes": "",
+  "path": "",
+  "user": true,
+  "clientSessionId": "sess-1",
+  "queryId": "q-1"
+}
