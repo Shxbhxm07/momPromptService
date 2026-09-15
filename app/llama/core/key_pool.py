@@ -6,8 +6,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class GroqKeyPool:
-    """Round-robin pool of Groq API keys with per-key cooldown after a 429."""
+class KeyPool:
+    """Round-robin pool of LLM API keys (IBM Cloud, OpenRouter, Groq…) with per-key cooldown after a 429."""
 
     def __init__(self, keys):
         self._keys = keys
@@ -81,5 +81,5 @@ def load_pool_from_env(multi_var=None):
         keys = list(dict.fromkeys(k.strip() for k in raw.split(",") if k.strip()))
         if keys:
             logger.info(f"[KeyPool] {len(keys)} key(s) loaded from {var}")
-            return GroqKeyPool(keys)
+            return KeyPool(keys)
     return None

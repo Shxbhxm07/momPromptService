@@ -284,7 +284,22 @@ unreachable; 500 the job failed. The body is always the ack.
   30/30 — address, telephone, secretary and distribution from the template, the job's own `file_ref` and
   classification winning over it, meeting content from the prompt, no specimen text in the minutes, and the
   template recorded in Elasticsearch. Sample templates in `templates/`.
-- **Not yet**: a SUCCESS job on the cluster, pending the IBM Cloud change.
+- **Cluster, 2026-09-15: working end to end on IBM Cloud watsonx** — `ocp-test-003` (document) and
+  `ocp-combo-001` (template + prompt + transcript) both SUCCESS; `template_status: used`. One gap found and
+  fixed: watsonx returned the template's file reference empty (OpenRouter had read it), so a file reference is
+  now also taken from the line where it stands before "dt" (Ch 6 para 16.2) when the model gives none.
+- **No "Groq" in the logs.** The key pool module is `app/llama/core/key_pool.py` (was `groq_key_pool.py`),
+  labels are `[KeyPool]` / `[LLM]`, and the old "No Groq keys set — backend is local … Running offline" line —
+  wrong on a cloud endpoint — now says an API key is not needed for endpoints that authenticate another way.
+  Key variables read, in order: `WATSONX_API_KEY`, `LLM_API_KEY`, legacy `GROQ_API_KEYS` (still works). Local
+  compose uses `LLM_API_KEY`.
+- **Minutes content problems seen on `ocp-combo-001`** (writer, not template — not yet fixed): the title took
+  the date of the minutes being approved as the meeting's date; an action the transcript never states
+  ("Review the advisories"); the dedup step kept "approval … is needed" over "approved"; "Mr. Chair" as a name
+  and its correct role downgraded to Unknown because "Chairperson" wasn't said verbatim; correct names
+  ("Carroll", "Comptroller") dropped because the transcript's speech-to-text spelling differs; 11 pages for a
+  15-minute meeting. Candidate fixes, in order: meeting date only from mom_meta or an explicit statement;
+  ground decisions and actions like key points; brevity for JSSD.
 
 ## Next steps
 

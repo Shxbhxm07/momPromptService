@@ -1,7 +1,7 @@
 """Bearer tokens for IBM watsonx — Cloud Pak for Data (on-prem) and IBM Cloud (SaaS).
 
 WHY THIS EXISTS. Every other backend this service talks to — OpenRouter, Groq, a local vLLM — takes
-a static API key, which is what GroqKeyPool holds and what generate() puts straight into the
+a static API key, which is what KeyPool holds and what generate() puts straight into the
 Authorization header. watsonx does not: the credential is exchanged for a token that EXPIRES. Send
 the key itself and every call is 401; fetch a token once and calls start failing mid-meeting, which
 on a 20-minute job means a half-written MoM. So tokens are cached and re-fetched before they expire.

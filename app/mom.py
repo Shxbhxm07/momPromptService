@@ -61,7 +61,7 @@ class MomGenerator:
         reports whether an endpoint and a credential are configured; a job still surfaces a wrong one.
         """
         from llama import config as lc
-        from llama.core.groq_key_pool import KEY_VARS
+        from llama.core.key_pool import KEY_VARS
         import os
         has_key = any(os.getenv(v, "").strip() for v in KEY_VARS)
         has_cp4d = bool(lc.CP4D_AUTH_URL and lc.CP4D_USERNAME and lc.CP4D_API_KEY)

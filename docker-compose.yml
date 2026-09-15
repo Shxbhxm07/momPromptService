@@ -29,8 +29,9 @@ services:
       APP_MODE: online
       VLLM_API_BASE: https://openrouter.ai/api/v1
       LLM_MODEL_PATH: ${LLM_MODEL:-meta-llama/llama-3.3-70b-instruct}
-      # Named for Groq for historical reasons; it is just "Authorization: Bearer <key>".
-      GROQ_API_KEYS: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env — copy .env.example}
+      # Sent as "Authorization: Bearer <key>". LLM_API_KEY is the neutral name the writer reads (after
+      # WATSONX_API_KEY, before the legacy GROQ_API_KEYS, which still works).
+      LLM_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env — copy .env.example}
       # Llama emits no reasoning tokens; the output budgets key on this.
       LLM_IS_REASONING: "false"
       MODEL_CONTEXT_LIMIT: "131072"

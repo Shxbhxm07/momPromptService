@@ -14,7 +14,7 @@ from llama.config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOK
                     WATSONX_VERSION, IBM_IAM_URL, LLM_AUTH_MODE, LLM_VERIFY_SSL,
                     CP4D_AUTH_URL, CP4D_USERNAME, CP4D_API_KEY, CP4D_TOKEN_TTL, MOM_WINDOW_KEY_POINTS, WINDOW_CONCURRENCY,
                     LLM_CONCURRENCY)
-from llama.core.groq_key_pool import load_pool_from_env
+from llama.core.key_pool import load_pool_from_env
 from llama.core.translation_validator import validate_translation
 from llama.prompts import MEETING_ANALYSIS_PROMPT, SYNTHESIS_PROMPT, MEETING_ANALYSIS_PROMPT_JSON, SYNTHESIS_PROMPT_JSON, SPEAKER_MAPPING_PROMPT, DECISIONS_EXTRACTION_PROMPT, KEY_POINTS_EXTRACTION_PROMPT, WINDOW_EXTRACTION_PROMPT, SUMMARY_FROM_POINTS_PROMPT, FIGURES_EXTRACTION_PROMPT, TRANSCRIPT_CORRECTION_PROMPT, ITEMS_MERGE_PROMPT, DECISIONS_VERIFY_PROMPT, TRANSLATED_TRANSCRIPT_CORRECTION_PROMPT, ACTION_ITEMS_EXTRACTION_PROMPT, MEETING_TYPE_CLASSIFY_PROMPT, TEMPLATE_FOCUS
 from llama.utils.text_utils import chunk_transcript, clean_mom_output, preprocess_transcript
@@ -47,10 +47,13 @@ if _key_pool is None or len(_key_pool) == 0:
         sys.exit(1)
     # Local/offline backend: no keys needed. Requests still send an Authorization
     # header, but a local vLLM ignores it, so a placeholder is sufficient.
-    logger.info(f"[GroqPool] No Groq keys set — not required, backend is local ({VLLM_API_BASE}). Running offline.")
+    # Not "running offline": this also fires for Cloud Pak for Data, which authenticates with a
+    # username and key rather than an API-key pool, and that is a remote cloud endpoint.
+    logger.info(f"[KeyPool] No API key set — fine for an endpoint that authenticates another way "
+                f"(Cloud Pak for Data, a local vLLM): {VLLM_API_BASE}")
     _key_pool = None
 else:
-    logger.info(f"[GroqPool] Loaded {len(_key_pool)} keys — pool active")
+    logger.info(f"[KeyPool] Loaded {len(_key_pool)} key(s) — pool active")
 
 # Sent as the Bearer token when there is no pool. A local vLLM does not authenticate,
 # but httpx still needs some value for the header.
@@ -157,7 +160,7 @@ class LLMManager:
         if not fresh:
             status = _pool_status()
             logger.warning(
-                f"[GroqPool] All keys cooling — using soonest available key #{idx} (...{key[-4:]}) "
+                f"[KeyPool] All keys cooling — using soonest available key #{idx} (...{key[-4:]}) "
                 f"| pool: {status['available']}/{status['total']} available, {status['cooling']} cooling"
             )
         return key, idx
@@ -245,7 +248,7 @@ class LLMManager:
             raise RuntimeError(
                 f"Configured model '{self.model_id}' is NOT available at {self.api_base}. "
                 f"Available: {loaded_ids}. Set LLM_MODEL_PATH to one of those "
-                f"(e.g. 'openai/gpt-oss-120b' on Groq) — refusing to fall back to a wrong model."
+                f"(a model id this endpoint does not serve) — refusing to fall back to a wrong model."
             )
             
     @staticmethod
@@ -408,7 +411,7 @@ class LLMManager:
         retried_budget = False   # allow ONE extended-budget retry if gpt-oss returns content=None
         for attempt in range(4):
             try:
-                logger.info(f"[GroqPool] Using key #{key_idx} (...{key[-4:]})")
+                logger.info(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
                 response = self.client.post(url, json=payload,
                                             headers={"Authorization": f"Bearer {self._bearer(key)}"})
                 response.raise_for_status()
@@ -449,18 +452,18 @@ class LLMManager:
                     self._cooldown(key, 60)
                     status = _pool_status()
                     logger.warning(
-                        f"[GroqPool] Cooling key #{key_idx} (...{key[-4:]}) for 60s "
+                        f"[KeyPool] Cooling key #{key_idx} (...{key[-4:]}) for 60s "
                         f"| pool: {status['available']}/{status['total']} available, {status['cooling']} cooling"
                     )
                     key, key_idx = self._get_key()
-                    logger.warning(f"Groq rate limited (429), retrying in {wait}s... (attempt {attempt+1}/4)")
+                    logger.warning(f"[LLM] rate limited (429), retrying in {wait}s... (attempt {attempt+1}/4)")
                     time.sleep(wait)
                     continue
                 if e.response.status_code in (401, 403):
                     self._disable(key)
                     status = _pool_status()
                     logger.error(
-                        f"[GroqPool] Key #{key_idx} (...{key[-4:]}) REVOKED — removed from rotation "
+                        f"[KeyPool] Key #{key_idx} (...{key[-4:]}) REVOKED — removed from rotation "
                         f"until restart (HTTP {e.response.status_code}) "
                         f"| pool: {status['available']}/{status['total']} available, "
                         f"{status['disabled']} disabled"
@@ -474,7 +477,7 @@ class LLMManager:
             except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as e:
                 if attempt < 3:
                     wait = RETRY_DELAYS[attempt]
-                    logger.warning(f"Groq connection error (attempt {attempt+1}/4): {e}. Retrying in {wait}s...")
+                    logger.warning(f"[LLM] connection error (attempt {attempt+1}/4): {e}. Retrying in {wait}s...")
                     time.sleep(wait)
                     continue
                 logger.error(f"vLLM API connection failed after retries: {e}")
@@ -685,7 +688,7 @@ class LLMManager:
         key, key_idx = self._get_key()
         for attempt in range(3):
             try:
-                logger.info(f"[GroqPool] Using key #{key_idx} (...{key[-4:]})")
+                logger.info(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
                 auth = {"Authorization": f"Bearer {key}"}
                 with self.client.stream("POST", url, json=payload, headers=auth) as response:
                         response.raise_for_status()
@@ -709,18 +712,18 @@ class LLMManager:
                     self._cooldown(key, 60)
                     status = _pool_status()
                     logger.warning(
-                        f"[GroqPool] Cooling key #{key_idx} (...{key[-4:]}) for 60s "
+                        f"[KeyPool] Cooling key #{key_idx} (...{key[-4:]}) for 60s "
                         f"| pool: {status['available']}/{status['total']} available, {status['cooling']} cooling"
                     )
                     key, key_idx = self._get_key()
-                    logger.warning(f"Groq rate limited (429) on stream, retrying in {wait}s... (attempt {attempt+1}/3)")
+                    logger.warning(f"[LLM] rate limited (429) on stream, retrying in {wait}s... (attempt {attempt+1}/3)")
                     time.sleep(wait)
                     continue
                 if e.response.status_code in (401, 403):
                     self._disable(key)
                     status = _pool_status()
                     logger.error(
-                        f"[GroqPool] Key #{key_idx} (...{key[-4:]}) REVOKED — removed from rotation "
+                        f"[KeyPool] Key #{key_idx} (...{key[-4:]}) REVOKED — removed from rotation "
                         f"until restart (HTTP {e.response.status_code}) "
                         f"| pool: {status['available']}/{status['total']} available, "
                         f"{status['disabled']} disabled"
