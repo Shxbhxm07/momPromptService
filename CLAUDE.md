@@ -177,7 +177,9 @@ unreachable; 500 the job failed. The body is always the ack.
   hosts with different quantisation), so it was widened, not dropped: `DeepInfra,AkashML,Parasail`,
   the only hosts matching DeepInfra on BOTH fp8 quantisation and the 131,072 context (Cloudflare is
   fp8 but 24k, too small for a long transcript). Before: 0 of 20 calls succeeded. After, same file
-  (`t1.txt`, 13,408 chars): 20 of 20, SUCCESS in 263 s. **This only affects local testing** — on
+  (`t1.txt`, 13,408 chars): 20 of 20, SUCCESS in 263 s. Then, at the user's request, **DeepInfra
+  removed**: the list is now `AkashML,Parasail`. The model never changed — it is Llama 3.3 70B on
+  every host; a host is only whose machines run it, which the user had read as a different model. **This only affects local testing** — on
   the cluster the writer talks to watsonx, where there are no providers to pin.
 - **Kafka messages are lost on `docker compose down`** — known, not yet fixed. `docker-compose.yml`
   mounts `/var/lib/kafka/data`, but apache/kafka writes to `/tmp/kafka-logs`. MinIO and

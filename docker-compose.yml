@@ -66,13 +66,16 @@ services:
       # on 2026-09-15 DeepInfra answered 429 "rate-limited upstream" to the very first request, 20
       # times running, while the same model unpinned answered 200. The writer sends
       # allow_fallbacks=false, so OpenRouter tries exactly these hosts, in order, and no others.
-      # They are the three that match on BOTH counts that matter (checked against OpenRouter's
+      # They match on BOTH counts that matter (checked against OpenRouter's
       # /models/<model>/endpoints on 2026-09-15):
       #     fp8 quantisation   — the same weights, so the same answers
       #     131,072 context    — Cloudflare is fp8 too but stops at 24,000, which a long transcript
       #                          passes; a fallback that silently fails on big jobs is worse than none
+      # DeepInfra also matches and is deliberately left out, at the user's request: it was the host
+      # refusing every call on 2026-09-15. The model is the same either way — Llama 3.3 70B; a host
+      # is only whose machines run it.
       # Re-check that endpoint before adding a host: a provider's quantisation can change.
-      LLM_PROVIDER_ORDER: DeepInfra,AkashML,Parasail
+      LLM_PROVIDER_ORDER: AkashML,Parasail
       MOM_WINDOW_KEY_POINTS: "true"
     # No dictionary bind mount: llama/Dockerfile installs `wamerican` into the image, so the
     # over-correction guard keeps its full wordlist wherever this runs, not only on this machine.
