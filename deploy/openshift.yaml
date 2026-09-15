@@ -8,16 +8,23 @@ metadata:
   labels: {app: mom-prompt-service}
 spec:
   replicas: 1                      # one consumer in the group; a second replica would sit idle
+  # Never two consumers during a rollout. The default RollingUpdate briefly runs the old pod and the
+  # new one together; both join the same Kafka group, which forces a rebalance and can interrupt a
+  # job that is already four minutes into an LLM call. mom-consumer sets this for the same reason.
+  strategy: {type: Recreate}
   selector: {matchLabels: {app: mom-prompt-service}}
   template:
     metadata: {labels: {app: mom-prompt-service}}
     spec:
+      # SIGTERM finishes the job in hand before the pod exits. At the default 30 s a redeploy kills a
+      # running job; the offset is uncommitted so nothing is lost, but the work and the tokens are.
+      terminationGracePeriodSeconds: 3600
       containers:
       - name: mom-prompt-service
         image: <registry>/<repo>:mom-prompt-service
         ports: [{containerPort: 8000}]
         env:
-        - {name: LLAMA_URL, value: "http://llama-service:8001"}
+        - {name: LLAMA_URL, value: "http://mom-prompt-llama:8001"}   # this service's own, not the shared one
         - {name: KAFKA_BOOTSTRAP, value: "kafka-service.teamsync.svc.cluster.local:9092"}
         - {name: JOB_KIND, value: prompt}
         - {name: KAFKA_JOB_TOPIC, value: "mom-prompt.jobs"}
@@ -41,6 +48,59 @@ spec:
           httpGet: {path: /, port: 8000}
           initialDelaySeconds: 20
           periodSeconds: 30
+---
+# ── this service's own minutes writer ────────────────────────────────────────────────────────────
+# Built from llama/ in this repo, NOT the llama-service Deployment that mom-consumer and
+# translate-consumer share. The MoM prompt is hard-coded in prompts.py with no environment override,
+# so writing minutes from documents rather than transcripts needs its own image. One more pod; in
+# exchange, nothing this service does can change the minutes the audio service produces.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mom-prompt-llama
+  labels: {app: mom-prompt-llama}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mom-prompt-llama}}
+  template:
+    metadata: {labels: {app: mom-prompt-llama}}
+    spec:
+      containers:
+      - name: mom-prompt-llama
+        image: <registry>/<repo>:mom-prompt-llama     # built from this repo's llama/ folder
+        ports: [{containerPort: 8001}]
+        env:
+        # watsonx on Cloud Pak for Data, the same values the shared llama-service uses. See
+        # ~/offline-mom-api/docs/ibm-watsonx.md; the URL is given COMPLETE, including ?version=.
+        - {name: APP_MODE, value: online}
+        - {name: VLLM_API_BASE, value: "<watsonx host>/ml/v1/text/chat?version=2023-05-29"}
+        - {name: LLM_MODEL_PATH, value: "ibm/granite-4-h-small"}
+        - {name: WATSONX_PROJECT_ID, value: "<project id>"}
+        - {name: LLM_AUTH_MODE, value: cp4d}
+        - {name: CP4D_AUTH_URL, value: "<cp4d host>/icp4d-api/v1/authorize"}
+        - {name: LLM_VERIFY_SSL, value: "false"}      # self-signed cluster certificate
+        - {name: LLM_PROVIDER_ORDER, value: ""}       # OpenRouter-only setting; empty on watsonx
+        - {name: MOM_WINDOW_KEY_POINTS, value: "true"}
+        - {name: CP4D_USERNAME, valueFrom: {secretKeyRef: {name: <secret>, key: CP4D_USERNAME}}}
+        - {name: CP4D_API_KEY, valueFrom: {secretKeyRef: {name: <secret>, key: CP4D_API_KEY}}}
+        resources:
+          requests: {cpu: 250m, memory: 256Mi}
+          limits: {memory: 1Gi}       # a proxy: it holds one request's text, never a model
+        livenessProbe:                # "/" is static; /health round-trips to the LLM
+          httpGet: {path: /, port: 8001}
+          initialDelaySeconds: 15
+          periodSeconds: 30
+        readinessProbe:
+          httpGet: {path: /, port: 8001}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mom-prompt-llama}
+spec:
+  selector: {app: mom-prompt-llama}
+  ports: [{port: 8001, targetPort: 8001}]
 ---
 apiVersion: v1
 kind: Service

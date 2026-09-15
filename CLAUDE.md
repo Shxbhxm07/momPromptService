@@ -52,7 +52,25 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/docx_export.py` | **the JSSD renderer**, copied **unchanged** from `api/utils/docx_export.py` |
 | `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
 | `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
-| `deploy/openshift.yaml` | Deployment + Service + Route (with the 3600 s timeout), `JOB_KIND=prompt` |
+| `llama/` | **this service's own minutes writer**, vendored whole from `~/offline-mom-api/llama-service` on 2026-09-15. Its own image, its own Deployment. See below |
+| `deploy/openshift.yaml` | 5 manifests: both Deployments, both Services, the Route (3600 s timeout) |
+| `docker-compose.yml`, `.env.example` | the whole local test environment, built from this repo alone |
+
+### Why `llama/` is here
+
+On the cluster ONE `llama-service` Deployment used to answer mom-consumer, translate-consumer **and**
+this service. The MoM prompt lives in `llama/prompts.py` and has **no environment override** — checked,
+there is none — so changing it for documents would change it for recordings too. This service exists to
+write minutes from notes and reports, not transcripts, so that change is the whole point of it.
+
+Vendored **whole and unmodified**, so it works from day one. The nine endpoints this service never calls
+(translation, speaker mapping, transcript correction, localisation — it uses only `/` and `/summarize`)
+are still in there; trimming them is a separate decision, not a prerequisite. It is a pure FastAPI/httpx
+proxy — no GPU, no PyTorch, ~408 KB of source, deps `httpx fastapi uvicorn python-multipart` plus the
+`wamerican` wordlist the Dockerfile installs.
+
+**Jenkins needs a second job** for it: same repo, build context **`llama/`**, image tag
+`mom-prompt-llama`. The service's own job stays at the repo root.
 
 The copied files are copies, not imports, because this service is separate from offline-mom-api. When
 one of them changes in `~/offline-mom-api/api` (especially `docx_export.py`), copy the change here too:
@@ -141,7 +159,16 @@ unreachable; 500 the job failed. The body is always the ack.
   read "…to fund the sheriff's department **by None stated**." `_clean` trapped "none" and "not
   stated" but not "None stated", "TBD" or "to be decided". `_EMPTY` in `docx_export.py` now covers
   that family; "asap", "immediate" and "ongoing" are deliberately kept, being what was actually said.
-- **Not yet**: built as its own image, deployed, run against real Kafka/MinIO/Elastic, or tried on
+- **Fully separate since 2026-09-15.** Own repo, own images (both of them), own network, own Kafka,
+  MinIO, Elasticsearch and minutes writer. Verified end to end after the split: job `sep-001`,
+  7,211-character transcript + prompt + full `mom_meta`, SUCCESS in **231 s**. The ack returned
+  `accessVar`, `userId` and `isUser` exactly as sent; the .docx (43 KB, 3 tables) carried the
+  CONFIDENTIAL marking, file reference, venue and time in the title, secretary block, distribution
+  table and amendments-by date, with no placeholder leak.
+- `deploy/openshift.yaml` also gained `strategy: Recreate` and `terminationGracePeriodSeconds: 3600`,
+  which mom-consumer has and this did not: without them a redeploy runs two consumers in one group
+  and kills a job that is minutes into an LLM call.
+- **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on
   watsonx (the cluster's model, `ibm/granite-4-h-small`).
 
 ## Next steps
@@ -215,9 +242,9 @@ and a minutes writer, on their own network (`mom-prompt_default`), with nothing 
 committed file. Ports: service 8010, llama 8011, Kafka UI 8090, MinIO 9000/9001, Elastic 9200,
 Kafka 29092.
 
-llama-service is the one image not built here, deliberately: on the cluster ONE Deployment serves
-this service, mom-consumer and translate-consumer, so it is shared infrastructure like MinIO, not
-part of any of their repos. `LLAMA_URL` + `--scale llama=0` points at an existing one instead.
+**Nothing is borrowed any more.** Both images are built from this repo: `Dockerfile` (the service)
+and `llama/Dockerfile` (the minutes writer). `LLAMA_URL` + `--scale llama=0` points at an existing
+llama-service instead, if you ever want that.
 
 ### The older way, mounting into the audio image
 
