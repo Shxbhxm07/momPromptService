@@ -1,9 +1,9 @@
-# 03 — The Service.
+# 02 — The Service.
 apiVersion: v1
 kind: Service
 metadata:
   name: mom-prompt-service
-  namespace: trino
+  namespace: mom-ai
   labels:
     app: mom-prompt-service
 spec:

@@ -53,7 +53,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
 | `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
 | `app/llama/` | **the minutes writer, a package inside the service** — what used to be llama-service. Called in process by `app/mom.py`: no HTTP, no second pod. See below |
-| `deploy/openshift/01-secret.yaml` … `04-route.yaml` | **the deployment, in apply order** — Secret, the ONE Deployment, its Service, the Route (3600 s timeout). Env values inline, copy-paste ready for DevOps |
+| `deploy/openshift/01-deployment.yaml` … `03-route.yaml` | **the deployment, in apply order** — the ONE Deployment, its Service, the Route (3600 s timeout). Every setting a plain env value, **no Secret object** (the user's choice); credentials are `CHANGE_ME` in the repo |
 | `docker-compose.yml`, `.env.example` | the whole local test environment, built from this repo alone |
 
 ### ONE service — why the writer is a package, not a pod
@@ -238,6 +238,13 @@ unreachable; 500 the job failed. The body is always the ack.
   config guesses `cp4d` while `CP4D_AUTH_URL` exists, straight back to the dead host (verified). So
   `CP4D_*` must be removed, not just ignored. (2) An API key retyped from a screenshot fails IAM with
   `BXNIM0415E Provided API key could not be found` — lowercase l and capital I look identical.
+- **No Secret object, by the user's decision (2026-09-15).** Every setting — MinIO keys, Elasticsearch
+  login and `WATSONX_API_KEY` included — is a plain `env` value in the Deployment. `01-secret.yaml` is
+  gone; the files are now `01-deployment`, `02-service`, `03-route`. The repo copy carries `CHANGE_ME` for
+  each credential and must never be committed filled in. Consequence the user accepted: anyone who can
+  view the Deployment can read them. `imagePullSecrets: dockerocp-secret` STAYS — it is the registry
+  pull credential, not an env secret; without it the pod cannot pull `bajpai92/repo:mom-prompt-service…`.
+  The repo YAML now also carries the real namespace (`mom-ai`) and that pull secret.
 - **Not yet**: a SUCCESS job on the cluster, pending the IBM Cloud change.
 
 ## Next steps
@@ -247,7 +254,7 @@ unreachable; 500 the job failed. The body is always the ack.
    this service — not a folder inside `momTranscriptionService`. New Jenkins job from that repo,
    **build context = the repo root**, since `Dockerfile` sits beside `app/`.
 2. Kafka UI: create topics `mom-prompt.jobs` and `mom-prompt.acks` (1 partition, replication 1, like the others).
-3. OCP (trino project): apply `deploy/openshift/01-secret.yaml` → `02-deployment.yaml` → `03-service.yaml` → `04-route.yaml`, in that order. Env values are the
+3. OCP (project `mom-ai`): apply `deploy/openshift/01-deployment.yaml` → `02-service.yaml` → `03-route.yaml`, in that order. Env values are the
    same ones mom-consumer uses; passwords from a Secret.
 4. Test: upload a PDF to MinIO `mom/mom-docs/`, produce a message on `mom-prompt.jobs` (example below),
    check the ack, the .docx in MinIO, and `GET mom-attached/_doc/<conversationId>` in Kibana.

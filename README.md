@@ -12,7 +12,7 @@ service (`~/offline-mom-api/docs/kafka-contract.md`), plus one field: `prompt`.
 - **Kafka:** jobs on `mom-prompt.jobs`, acknowledgements on `mom-prompt.acks` (`KAFKA_JOB_TOPIC`, `KAFKA_ACK_TOPIC`).
 - **HTTP:** `POST /v1/mom-prompt` with the same JSON as a Kafka job returns the acknowledgement. `GET /docs` shows examples.
 - **Needs:** an LLM endpoint for the in-process minutes writer (`VLLM_API_BASE`, `LLM_MODEL_PATH`, credentials), MinIO (`MINIO_*`), Elasticsearch (`ELASTIC_*`, `CHUNK_INDEX`). All settings are in `app/config.py`.
-- **OpenShift:** apply `deploy/openshift/01-secret.yaml` → `02-deployment.yaml` → `03-service.yaml` → `04-route.yaml`, in order. Keep the route's 3600 s timeout, because a job holds the request open until the minutes are written.
+- **OpenShift:** apply `deploy/openshift/01-deployment.yaml` → `02-service.yaml` → `03-route.yaml`, in order (project `mom-ai`). Every setting is a plain env value; fill each `CHANGE_ME` first. Keep the route's 3600 s timeout, because a job holds the request open until the minutes are written.
 
 ## Layout
 
@@ -36,7 +36,7 @@ app/  config.py          every setting, from env
       docx_export.py     the JSSD .docx renderer
 Dockerfile
 requirements.txt
-deploy/openshift/  01-secret, 02-deployment, 03-service, 04-route
+deploy/openshift/  01-deployment, 02-service, 03-route
 ```
 
 `documents.py`, `docx_export.py` and `minio_client.py` are **byte-identical copies** of files in

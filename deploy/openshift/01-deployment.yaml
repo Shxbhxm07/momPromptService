@@ -1,7 +1,7 @@
-# 02 — The deployment. ONE service: the HTTP API, the Kafka consumer and the minutes writer
+# 01 — The deployment. ONE service: the HTTP API, the Kafka consumer and the minutes writer
 # (Llama 3.3 70B on IBM watsonx, IBM Cloud us-south) all run in this single pod.
-# Apply 01-secret.yaml first.
-# Replace CHANGE_ME_REGISTRY (image) before applying.
+# Every setting is a plain environment value — no Secret object. Replace each CHANGE_ME with the real
+# value before applying; never commit the filled copy.
 #
 # Before the first deploy, create these Kafka topics (1 partition, replication 1):
 #   mom-prompt.jobs
@@ -10,7 +10,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mom-prompt-service
-  namespace: trino
+  namespace: mom-ai
   labels:
     app: mom-prompt-service
 spec:
@@ -26,12 +26,18 @@ spec:
         app: mom-prompt-service
     spec:
       terminationGracePeriodSeconds: 3600
+      # Lets OpenShift pull the image from the private registry. NOT an environment secret — without it
+      # the pod cannot start (ImagePullBackOff).
+      imagePullSecrets:
+        - name: dockerocp-secret
       containers:
         - name: mom-prompt-service
-          image: CHANGE_ME_REGISTRY/mom-prompt-service:latest
+          image: bajpai92/repo:mom-prompt-service6     # the tag Jenkins last pushed
           imagePullPolicy: Always
           ports:
-            - containerPort: 8000
+            - name: http
+              containerPort: 8000
+              protocol: TCP
           env:
             # ── service ──
             - name: JOB_KIND
@@ -55,15 +61,9 @@ spec:
             - name: MINIO_SUMMARY_BUCKET
               value: "mom"
             - name: MINIO_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: MINIO_ACCESS_KEY
+              value: "CHANGE_ME"
             - name: MINIO_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: MINIO_SECRET_KEY
+              value: "CHANGE_ME"
             # ── Elasticsearch ──
             - name: ELASTIC_URL
               value: "http://elasticsearch-service.teamsync.svc.cluster.local:9200"
@@ -74,15 +74,9 @@ spec:
             - name: CHUNK_INDEX
               value: "mom_v1"
             - name: ELASTIC_USER
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: ELASTIC_USER
+              value: "CHANGE_ME"
             - name: ELASTIC_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: ELASTIC_PASSWORD
+              value: "CHANGE_ME"
             # ── minutes writer (runs inside this pod) — IBM watsonx on IBM Cloud (us-south) ──
             # NOT Cloud Pak for Data: cpd-watsonx-imir.apps.ocp4.iaf.in does not resolve from this
             # cluster ("Name or service not known"). Set LLM_AUTH_MODE exactly ONCE — a second, empty
@@ -110,10 +104,7 @@ spec:
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
             - name: WATSONX_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: WATSONX_API_KEY
+              value: "CHANGE_ME"
           resources:
             requests:
               cpu: 500m
