@@ -226,7 +226,19 @@ unreachable; 500 the job failed. The body is always the ack.
   venue and secretary, Elasticsearch with 7 attendees, 39 key points, 6 decisions, 10 actions. The
   DevOps YAML is ONE Deployment and ONE Service: 4 resources valid under strict kubeconform, 28 of 28
   cross-file checks. The onboarding form is one service row and 31 variables, matching the YAML.
-- **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on watsonx.
+- **Deployed to OCP 2026-09-15 (project `mom-ai`, not `trino` as the YAML says).** Kafka, MinIO and
+  Elasticsearch connected on the first job. The writer did not: `Name or service not known` for
+  `cpd-watsonx-imir.apps.ocp4.iaf.in` — **the Cloud Pak host does not resolve from this cluster.** The
+  test cluster uses **IBM Cloud watsonx**: `https://us-south.ml.cloud.ibm.com/ml/v1/text/chat?version=2023-05-29`,
+  `LLM_AUTH_MODE=iam`, `WATSONX_API_KEY` (Secret), project `7ade6186-5397-4ed2-99f7-dce2cc6eda66`,
+  `LLM_VERIFY_SSL=true`. **This corrects an earlier entry here**: the audio service's older onboarding form
+  said IBM Cloud / iam and was dismissed in favour of the CP4D overlays — for THIS cluster the form was
+  right; the overlays describe the IAF client's network. YAML, Secret and form now say IBM Cloud.
+  **Two traps**: (1) `LLM_AUTH_MODE` set twice with the second empty → Kubernetes keeps the last → empty →
+  config guesses `cp4d` while `CP4D_AUTH_URL` exists, straight back to the dead host (verified). So
+  `CP4D_*` must be removed, not just ignored. (2) An API key retyped from a screenshot fails IAM with
+  `BXNIM0415E Provided API key could not be found` — lowercase l and capital I look identical.
+- **Not yet**: a SUCCESS job on the cluster, pending the IBM Cloud change.
 
 ## Next steps
 

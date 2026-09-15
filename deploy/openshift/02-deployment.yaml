@@ -1,7 +1,7 @@
 # 02 — The deployment. ONE service: the HTTP API, the Kafka consumer and the minutes writer
-# (Llama 3.3 70B on IBM watsonx) all run in this single pod.
+# (Llama 3.3 70B on IBM watsonx, IBM Cloud us-south) all run in this single pod.
 # Apply 01-secret.yaml first.
-# Replace CHANGE_ME_REGISTRY (image) and CHANGE_ME (WATSONX_PROJECT_ID) before applying.
+# Replace CHANGE_ME_REGISTRY (image) before applying.
 #
 # Before the first deploy, create these Kafka topics (1 partition, replication 1):
 #   mom-prompt.jobs
@@ -83,21 +83,22 @@ spec:
                 secretKeyRef:
                   name: mom-prompt-secrets
                   key: ELASTIC_PASSWORD
-            # ── minutes writer (runs inside this pod) — IBM watsonx, Cloud Pak for Data ──
+            # ── minutes writer (runs inside this pod) — IBM watsonx on IBM Cloud (us-south) ──
+            # NOT Cloud Pak for Data: cpd-watsonx-imir.apps.ocp4.iaf.in does not resolve from this
+            # cluster ("Name or service not known"). Set LLM_AUTH_MODE exactly ONCE — a second, empty
+            # LLM_AUTH_MODE overrides the first and the auth mode is guessed.
             - name: APP_MODE
               value: "online"
             - name: VLLM_API_BASE
-              value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/ml/v1/text/chat?version=2023-05-29"
+              value: "https://us-south.ml.cloud.ibm.com/ml/v1/text/chat?version=2023-05-29"
             - name: LLM_MODEL_PATH
               value: "meta-llama/llama-3-3-70b-instruct"
             - name: WATSONX_PROJECT_ID
-              value: "CHANGE_ME"
+              value: "7ade6186-5397-4ed2-99f7-dce2cc6eda66"
             - name: LLM_AUTH_MODE
-              value: "cp4d"
-            - name: CP4D_AUTH_URL
-              value: "https://cpd-watsonx-imir.apps.ocp4.iaf.in/icp4d-api/v1/authorize"
+              value: "iam"
             - name: LLM_VERIFY_SSL
-              value: "false"
+              value: "true"
             - name: LLM_PROVIDER_ORDER
               value: ""
             - name: LLM_IS_REASONING
@@ -108,16 +109,11 @@ spec:
               value: "2"
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
-            - name: CP4D_USERNAME
+            - name: WATSONX_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: mom-prompt-secrets
-                  key: CP4D_USERNAME
-            - name: CP4D_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mom-prompt-secrets
-                  key: CP4D_API_KEY
+                  key: WATSONX_API_KEY
           resources:
             requests:
               cpu: 500m
