@@ -45,6 +45,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
 | `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
+| `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
@@ -106,6 +107,32 @@ again and the usual direction resumes:
 cp app/docx_export.py ~/offline-mom-api/api/utils/docx_export.py     # then commit in that repo too
 ```
 
+## Templates — what they contribute, and why only that (decided 2026-09-15)
+
+A JSSD template (Appendix AD) holds: **layout** fixed by the manual (already in `docx_export.py`), **specimen
+placeholders** ("Telephone number here", "FIRING PRACTICE", dotted lines), and the **issuing HQ's standing
+details** (address, telephone, file reference, signature block, distribution — Appendix AD explanatory note 1).
+Only the last differs between one unit's template and another's, so `app/template_details.py` extracts only that,
+and the minutes' layout still comes from the manual.
+
+Options weighed, and why they lost: tagged `{{placeholders}}` (official templates have none); filling the Word
+file in place (a second renderer, cannot read PDF templates, and only differs from ours on templates that break
+the manual — the ones rules cannot parse); the model rewriting the document (loses classification marks, watermark,
+page count); feeding template text to the writer (**its specimen text would pass the grounding check and reach the
+minutes**). **Do not add the template to `compose_source`.**
+
+Measured before building: a unit template gave the same 11 correct values as DOCX and as PDF (the PDF distribution
+table flattens to one line, which fixed rules cannot split). But the model, told to skip placeholders, returned
+"Telephone number here" and "Addressee 1" from a blank specimen, and a company's street address from a non-JSSD
+document. So three guards, none optional: a **gate** (≥3 of the manual's mandated phrases), **grounding** (every
+value word for word in the template), a **specimen filter** in code. Classification and precedence are never taken
+from a template. Extraction is one call per distinct template, cached in process by content hash. A template
+problem never fails a job; the outcome is in the log and in Elasticsearch (`template_name`, `template_status`
+= used | no_details | not_jssd | unreadable | failed, `template_fields`).
+
+Not done, deliberately: a template's non-standard layout, letterhead image or Hindi headings are not copied —
+the minutes follow the manual and are English.
+
 ## The contract
 
 **In** (Kafka message or HTTP body), the same fields as `mom.jobs`:
@@ -117,6 +144,10 @@ cp app/docx_export.py ~/offline-mom-api/api/utils/docx_export.py     # then comm
 - `document_names`, `document_ids`, `tenant_id`, `conversation_id` / `conversationId`.
 - `mom_meta` (optional): JSSD details no text contains: classification, file_ref, meeting_date,
   meeting_time, venue, secretary, distribution… (see `~/offline-mom-api/docs/kafka-contract.md`).
+- `template_url` / `templateUrl`, `template_name` / `templateName` (optional): the issuing HQ's **official
+  JSSD minutes template** in MinIO (DOCX, DOC, PDF or TXT). **Not a source document** — nothing in it is
+  summarised. It supplies only the HQ's standing details: `telephone`, `address`, `file_ref`, `secretary`,
+  `distribution`. The job's own `mom_meta` wins over it field by field. See *Templates* below.
 - Returned **exactly as sent** (same value and JSON type): `accessVar`, `userId`, `isUser`, `user`,
   `path`, `conversationId`, `clientSessionId`, `queryId`, `metaData`, `uploadType`, `grading`, `data`,
   `themes`. `conversationId` is filled from the job; `path` becomes `bucket/key` on success.
@@ -245,6 +276,14 @@ unreachable; 500 the job failed. The body is always the ack.
   view the Deployment can read them. `imagePullSecrets: dockerocp-secret` STAYS — it is the registry
   pull credential, not an env secret; without it the pod cannot pull `bajpai92/repo:mom-prompt-service…`.
   The repo YAML now also carries the real namespace (`mom-ai`) and that pull secret.
+- **Template feature built 2026-09-15** (see *Templates*). Verified: 47 no-AI tests fed with the model's real
+  replies (one caught a real bug — the "Tele:" prefix was stripped before the placeholder check, so
+  "Telephone number here" survived as "number here"); 7/7 live on MinIO + the model (unit template identical
+  from DOCX and PDF, blank specimen → nothing, "About Us" rejected with no model call, missing file and
+  spreadsheet → no crash, repeat template from cache in 0.01 s); end to end `tpl-e2e-001` SUCCESS in 135 s,
+  30/30 — address, telephone, secretary and distribution from the template, the job's own `file_ref` and
+  classification winning over it, meeting content from the prompt, no specimen text in the minutes, and the
+  template recorded in Elasticsearch. Sample templates in `templates/`.
 - **Not yet**: a SUCCESS job on the cluster, pending the IBM Cloud change.
 
 ## Next steps

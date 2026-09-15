@@ -42,6 +42,12 @@ class KafkaJob:
     # Optional details for the Word minutes that no recording contains: classification, file
     # reference, address, secretary, distribution and so on (see docs/kafka-contract.md).
     mom_meta: Dict[str, Any] = field(default_factory=dict)
+    # The issuing HQ's official minutes TEMPLATE (a MinIO key, like a file_urls entry). It is not a
+    # source document: nothing in it is summarised. It supplies only the standing details that stay
+    # the same from meeting to meeting — address, telephone, file reference, signature block and
+    # distribution list — and the layout still comes from the manual. See template_details.py.
+    template_url: str = ""
+    template_name: str = ""
     # The backend's own fields, kept EXACTLY as they arrived (same value, same type) so the ack can
     # hand them back untouched. Never parsed, never normalised — `accessVar` in particular is an
     # opaque credential-shaped string and `isUser` is a boolean the backend may also send as text.
@@ -114,6 +120,8 @@ def parse_job(msg: Dict[str, Any]) -> KafkaJob:
         document_names=list(_get(msg, "document_names", "documentNames", default=[]) or []),
         prompt=str(_get(msg, "prompt", default="") or "").strip(),
         mom_meta=_dict(_get(msg, "mom_meta", "momMeta", default={})),
+        template_url=str(_get(msg, "template_url", "templateUrl", default="") or "").strip(),
+        template_name=str(_get(msg, "template_name", "templateName", default="") or "").strip(),
         echo={k: msg[k] for k in ECHO_FIELDS if k in msg},
         raw=msg,
     )

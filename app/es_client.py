@@ -50,6 +50,11 @@ MOM_MAPPING: Dict[str, Any] = {
             "assigned_to": {"type": "keyword"},
             "assigned_by": {"type": "keyword"},
             "due":         {"type": "keyword"}}},
+        # The template, if the job sent one: its name, what happened to it, and which standing
+        # fields (address, telephone, file_ref, secretary, distribution) it supplied.
+        "template_name":      {"type": "keyword"},
+        "template_status":    {"type": "keyword"},
+        "template_fields":    {"type": "keyword"},
         # Where the generated .docx landed, mirroring the acknowledgement fields.
         "summary_bucket":     {"type": "keyword"},
         "summary_object_key": {"type": "keyword"},
@@ -79,7 +84,8 @@ class MomIndex:
                 logger.info(f"[ELASTIC] created index {name!r}")
 
     def index_mom(self, job, mom: Dict[str, Any], *, source: str,
-                  summary_bucket: str = "", summary_object_key: str = "") -> tuple:
+                  summary_bucket: str = "", summary_object_key: str = "",
+                  template: Optional[Dict[str, Any]] = None) -> tuple:
         """Write one MoM. Returns (index, _id).
 
         The document id is the conversation id where there is one, otherwise the joined
@@ -101,6 +107,11 @@ class MomIndex:
             "agenda": mom.get("agenda", []), "attendees": mom.get("attendees", []),
             "action_items": mom.get("action_items", []),
             "summary_bucket": summary_bucket, "summary_object_key": summary_object_key,
+            # Which template shaped the minutes and what it contributed — so a wrong address on a
+            # document can be traced to the template that supplied it.
+            "template_name": (template or {}).get("name", ""),
+            "template_status": (template or {}).get("status", "none"),
+            "template_fields": (template or {}).get("fields", []),
         }
         self.client.index(index=index, id=doc_id, document=body, refresh=True)
         logger.info(f"[ELASTIC] indexed {index}/{doc_id} ({source})")

@@ -1,0 +1,24 @@
+{
+  "tenant_id": "test",
+  "conversationId": "test-004",
+  "document_ids": ["test-004"],
+  "template_url": "mom/templates/sample_template_unit.docx",
+  "template_name": "sample_template_unit.docx",
+  "prompt": "Minutes of the monthly training conference held on 15 September 2026 at 1000 hours in the Brigade Conference Hall, chaired by Brig SK Menon, Commander. Present: Col AP Singh (Deputy Commander), Lt Col R Iyer (CO 1 Specimen Battalion), Lt Col M Khan (CO 2 Specimen Battalion) and Maj RK Verma (Brigade Major, secretary). Item one, annual firing: the range allotment for October is confirmed; CO 1 Specimen Battalion will complete zeroing of all weapons by 30 September. Item two, training syllabus: the revised cadre syllabus is approved; the Brigade Major will circulate it to all units by 20 September.",
+  "mom_meta": {
+    "classification": "RESTRICTED",
+    "meeting_date": "2026-09-15",
+    "meeting_time": "10:00",
+    "venue": "Brigade Conference Hall",
+    "amendments_by": "2026-09-25"
+  },
+  "metaData": "{}",
+  "uploadType": "",
+  "grading": "",
+  "data": null,
+  "themes": "",
+  "path": "",
+  "user": true,
+  "clientSessionId": "sess-1",
+  "queryId": "q-1"
+}

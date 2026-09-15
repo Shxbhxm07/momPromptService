@@ -27,6 +27,7 @@ app/  config.py          every setting, from env
       kafka_contract.py  the inbound message and the acknowledgement
       setup.py           MinIO / Elasticsearch / minutes-writer clients, made on first use
       document_checker.py  is this attachment readable, and small enough
+      template_details.py  the HQ's official JSSD template → its standing details (address, distribution …)
       logger_config.py   log format and level (UTC; the user reads IST = UTC+5:30)
       mom.py             runs the minutes writer in process, maps its answer to the MoM shape
       llama/             the minutes writer (prompts, LLM calls) — a package, not a separate service

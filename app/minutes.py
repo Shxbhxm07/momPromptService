@@ -16,6 +16,7 @@ import time
 from typing import Dict, List, Tuple
 
 import document_checker
+import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
 from docx_export import build_mom_docx
 from documents import extract_text_blocks
@@ -83,17 +84,30 @@ def process(job: KafkaJob, c: Clients) -> dict:
             raise ValueError(f"The documents are too long: {len(source)} characters, the limit is "
                              f"{MAX_SOURCE_CHARS}.")
 
+        # The template, if any, is read on its own path and never joins `source`: its specimen text
+        # would otherwise pass the writer's grounding check and reach the minutes. Only its validated
+        # standing details come back, and the job's own mom_meta wins over them field by field.
+        # load() never raises — a bad template costs its details, not the job.
+        template = template_details.load(job, c.store)
+        meta, from_template = template_details.merge(job.mom_meta, template.details)
+
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
 
-        docx_bytes = build_mom_docx(mom, job.mom_meta)
+        docx_bytes = build_mom_docx(mom, meta)
         bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest()),
                                      docx_bytes, DOCX_MIME)
-        c.index.index_mom(job, mom, source="attached", summary_bucket=bucket, summary_object_key=key)
+        c.index.index_mom(job, mom, source="attached", summary_bucket=bucket, summary_object_key=key,
+                          template={"name": template.name, "status": template.status,
+                                    "fields": from_template, "reason": template.reason})
         # Last, and it never raises: the minutes are stored by now, and a failed search copy must not
         # turn a finished job into a failed one. Does nothing until ENABLE_CHUNK_INDEX and CHUNK_INDEX.
         c.chunks.index_mom(job, mom, summary_bucket=bucket, summary_object_key=key)
+        if job.template_url:
+            logger.info(f"[JOB {job.conversation_id}] template {template.name!r}: {template.status}"
+                        + (f", used {from_template}" if from_template else "")
+                        + (f" — {template.reason}" if template.reason else ""))
         logger.info(f"[JOB {job.conversation_id}] done in {time.time()-t0:.0f}s — {bucket}/{key}")
         return build_ack(job, success=True, bucket=bucket, object_key=key,
                          description=(mom.get("summary") or "")[:300])

@@ -13,6 +13,9 @@ acknowledgement back on Kafka and a Word file in MinIO.
 | `job-message-full.json` | Job with every optional field, including `mom_meta` |
 | `job-message-minimal.json` | Job with a document and a prompt, nothing optional |
 | `job-message-prompt-only.json` | Job with **no document** — the meeting described in the prompt |
+| `job-message-template.json` | Job with the HQ's **official JSSD template** + a prompt |
+| `sample_template_unit.docx` | A unit's filled template: its address, telephone, file reference, secretary and distribution |
+| `sample_template_blank_specimen.docx` | The Appendix AD specimen with placeholders only — should contribute **nothing** |
 | `specimen_data.json` | The exact data the two specimens were rendered from |
 
 All names, addresses and file numbers in these files are **specimen values**, not real ones.
@@ -44,6 +47,8 @@ running after 30 minutes. For routine testing, keep files under about 15,000 cha
 | `document_ids` | yes | comes back as `fileIds` |
 | `tenant_id` | yes | the Word file is stored under `<tenant_id>/summaries/` |
 | `mom_meta` | no | the JSSD header details: classification, file reference, venue, secretary, distribution… |
+| `template_url` | no | MinIO path of the HQ's official JSSD template (DOCX, DOC, PDF or TXT), e.g. `mom/templates/hq.docx` |
+| `template_name` | no | the template's file name, shown in logs and Elasticsearch |
 | `accessVar`, `userId`, `isUser`, `user`, `path`, `clientSessionId`, `queryId`, `metaData`, `uploadType`, `grading`, `data`, `themes` | no | returned in the acknowledgement **exactly as sent** |
 
 ## The acknowledgement
@@ -105,6 +110,31 @@ Use `MoM_Specimen_Full.docx` as the reference.
 - [ ] No placeholder text such as `by None stated`, `by TBD`, `by N/A`
 - [ ] The prompt's instructions are followed but **not copied into** the minutes
 
+## Testing the template feature
+
+The template supplies **only the issuing HQ's standing details** — address, telephone, file reference,
+signature block and distribution list. The **layout always follows the JSSD manual**, and the **meeting
+content always comes from the prompt**. Upload `sample_template_unit.docx` to `mom/templates/`, then send
+`job-message-template.json`.
+
+- [ ] Telephone, the three address lines, the signature block and the distribution rows match the template
+- [ ] Anything the job sets in `mom_meta` **wins** over the template (e.g. put a `file_ref` in the job — it must replace the template's)
+- [ ] Title, date, attendees, items and decisions come from the **prompt**, not the template
+- [ ] **No template specimen text appears**: no "Nagin Range", "FIRING PRACTICE", "felicitating", "SGO", "Address line", "Addressee 1", "xx/yy"
+- [ ] Classification comes **only** from `mom_meta`, never from the template
+- [ ] The same result from the template saved as **PDF**
+- [ ] Elasticsearch record has `template_name`, `template_status: used`, `template_fields`
+
+| send as template | expected |
+|---|---|
+| `sample_template_blank_specimen.docx` | SUCCESS; nothing taken from it; `template_status: no_details` |
+| a non-JSSD document (letter, company profile) | SUCCESS; template ignored; `template_status: not_jssd` |
+| a path that does not exist | SUCCESS; template ignored; `template_status: unreadable` |
+| a spreadsheet | SUCCESS; template ignored; `template_status: unreadable` |
+| a template **only**, no prompt and no file | FAILURE — a template is not a meeting source |
+
+A template problem never fails the job — the minutes are still produced.
+
 ## Negative tests
 
 | send | expected |
@@ -130,6 +160,8 @@ These are known and tracked. Log them only if the behaviour is **different** fro
 | 6 | Title has no venue, time or date | these come from `mom_meta`; send it to see them |
 | 7 | A long name in the `Action` column **breaks mid-word** | the column is 1 inch wide, as in the manual, which uses short forms such as `SO (Ops)` |
 | 8 | Opened in LibreOffice, the font looks like a **serif** font | the file uses Arial; LibreOffice substitutes when Arial is not installed. Check in Microsoft Word |
+| 9 | A template's **own layout, letterhead image or Hindi headings** are not copied | by design: the template supplies standing details only; the layout follows the manual and the minutes are English |
+| 10 | In the distribution table, a template's Remarks value `NA` prints as an **empty** cell | `NA` is treated as "no value" so it can never appear as a false entry elsewhere |
 
 ### Files without an extension
 

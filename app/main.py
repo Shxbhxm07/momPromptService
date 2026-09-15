@@ -85,7 +85,12 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
         "prompt_and_pdf": {"summary": "A prompt and a PDF already in MinIO", "value": _EXAMPLE},
         "prompt_only": {"summary": "A prompt describing the meeting, no document",
                         "value": {k: v for k, v in _EXAMPLE.items()
-                                  if k not in ("file_urls", "document_names")}}})):
+                                  if k not in ("file_urls", "document_names")}},
+        "prompt_and_template": {"summary": "A prompt plus the HQ's official JSSD template",
+                                "value": {**{k: v for k, v in _EXAMPLE.items()
+                                             if k not in ("file_urls", "document_names")},
+                                          "template_url": "mom/templates/hq-jssd-template.docx",
+                                          "template_name": "hq-jssd-template.docx"}}})):
     """Minutes from a prompt and/or documents: the Kafka job, over HTTP.
 
     200 carries the SUCCESS acknowledgement; 422 (no prompt and no file), 503 (MinIO or Elasticsearch
