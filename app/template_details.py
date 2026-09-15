@@ -171,6 +171,21 @@ def _ask_model(text: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+# ── the file reference, from the layout ──────────────────────────────────────────────────────────
+# A service file reference is slash-separated with no spaces ("A/12345/DOT/MoM", "SPEC/9901/Trg/MoM")
+# and stands immediately before "dt" on its line. The specimen "File number comes here dt Date" has no
+# slash, so it never matches.
+_FILE_REF_BEFORE_DT = re.compile(r"(?<!\S)([A-Za-z0-9()&.\-]+(?:/[A-Za-z0-9()&.\-]+)+)[ \t|]+dt\b", re.I)
+
+
+def _file_ref_from_layout(template_text: str) -> str:
+    """The reference before "dt", searched only in the superscription — the text above the attendee
+    list — so a reference quoted further down the minutes cannot be mistaken for the file's own."""
+    head = re.split(r"following\s+were\s+present", template_text, maxsplit=1, flags=re.I)[0]
+    m = _FILE_REF_BEFORE_DT.search(head)
+    return m.group(1) if m else ""
+
+
 # ── validation ───────────────────────────────────────────────────────────────────────────────────
 _TEL_PREFIX = re.compile(r"^(tele(phone)?|tel|ph(one)?)\s*(no\.?)?\s*[:.\-]?\s*", re.I)
 _LIMITS = {"telephone": 40, "address_line": 120, "file_ref": 80, "name": 60, "rank": 40, "cell": 120}
@@ -215,6 +230,15 @@ def validate(raw: Dict[str, Any], template_text: str) -> Tuple[Dict[str, Any], L
     ref = re.sub(r"\s+dt\b.*$", "", str(raw.get("file_ref") or ""), flags=re.I).strip()
     if (r := keep("file_ref", ref, _LIMITS["file_ref"])):
         out["file_ref"] = r
+    elif not ref and (found := _file_ref_from_layout(template_text)):
+        # The model returned no reference. On the cluster, Llama 3.3 70B on watsonx did exactly that
+        # for a template the same model via OpenRouter read correctly — most likely because the line
+        # also carries the "dt Date" placeholder. The manual gives a structural anchor instead: "the
+        # file reference and the date are in line with each other" (Ch 6 para 16.2), so the reference
+        # is what stands right before "dt". Same guards as a model value.
+        if (r := keep("file_ref", found, _LIMITS["file_ref"])):
+            out["file_ref"] = r
+            logger.info(f"file_ref {r!r} taken from the '<reference> dt' line (the model returned none)")
 
     sec = raw.get("secretary") if isinstance(raw.get("secretary"), dict) else {}
     name = keep("secretary.name", str(sec.get("name") or "").strip("() "), _LIMITS["name"])
