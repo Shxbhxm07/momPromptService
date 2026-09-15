@@ -17,6 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
+# The minutes writer's over-correction guard needs the full English wordlist. Without it the guard
+# falls back to a 293-word list and rewrites ordinary words into product names ("coherent" ->
+# "Qdrant"). Its own layer, after the large one above, so adding it does not re-download LibreOffice.
+RUN apt-get update && apt-get install -y --no-install-recommends wamerican \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -s /usr/share/dict/american-english
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

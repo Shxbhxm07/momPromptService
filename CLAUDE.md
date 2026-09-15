@@ -17,7 +17,7 @@ Kafka mom-prompt.jobs ─┐                                   ┌─▶ Kafka m
 POST /v1/mom-prompt ───┘                                   └─▶ HTTP response body
 
 job.process:  file_urls ─▶ MinIO ─▶ text (PDF text layer; OCR for scanned pages) ─┐
-                                                          prompt ─────────────────┴─▶ llama-service /summarize
+                                                          prompt ─────────────────┴─▶ minutes writer, IN PROCESS (app/llama)
               minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/{md5}.docx
                       ─▶ Elasticsearch: record in ELASTIC_INDEX_ATTACHED (id = conversationId)
                                         + chunks in CHUNK_INDEX (their doc-ingest index, never created here)
@@ -43,7 +43,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/minutes.py` | the job: read documents, build the text, get minutes, render, store, index, ack |
 | `app/kafka_contract.py` | copied from `~/offline-mom-api/api`, **adapted**: `prompt` field; `path` is a file fallback only when it ends `.pdf/.docx/.doc/.txt`, so `"AsItIs"` is ignored |
 | `app/config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
-| `app/setup.py` | MinIO, Elasticsearch and llama-service clients, made once on first use (not at startup) |
+| `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
@@ -52,25 +52,38 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/docx_export.py` | **the JSSD renderer**, copied **unchanged** from `api/utils/docx_export.py` |
 | `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
 | `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
-| `llama/` | **this service's own minutes writer**, vendored whole from `~/offline-mom-api/llama-service` on 2026-09-15. Its own image, its own Deployment. See below |
-| `deploy/openshift/01-secret.yaml` … `04-route.yaml` | **the deployment, in apply order** — Secret, both Deployments, both Services, the Route (3600 s timeout). Env values inline, copy-paste ready for DevOps |
+| `app/llama/` | **the minutes writer, a package inside the service** — what used to be llama-service. Called in process by `app/mom.py`: no HTTP, no second pod. See below |
+| `deploy/openshift/01-secret.yaml` … `04-route.yaml` | **the deployment, in apply order** — Secret, the ONE Deployment, its Service, the Route (3600 s timeout). Env values inline, copy-paste ready for DevOps |
 | `docker-compose.yml`, `.env.example` | the whole local test environment, built from this repo alone |
 
-### Why `llama/` is here
+### ONE service — why the writer is a package, not a pod
 
-On the cluster ONE `llama-service` Deployment used to answer mom-consumer, translate-consumer **and**
-this service. The MoM prompt lives in `llama/prompts.py` and has **no environment override** — checked,
-there is none — so changing it for documents would change it for recordings too. This service exists to
-write minutes from notes and reports, not transcripts, so that change is the whole point of it.
+**The user's rule, stated 2026-09-14 and enforced 2026-09-15: everything in one service** — one image,
+one Deployment, one pod, like `Amit-K-Jha/transcription-service`. For a day the writer was split out as a
+second Deployment (`mom-prompt-llama`) that the service called over HTTP via `LLAMA_URL`; that broke the
+rule and was undone. **Do not reintroduce a second pod, a second image, or `LLAMA_URL`.**
 
-Vendored **whole and unmodified**, so it works from day one. The nine endpoints this service never calls
-(translation, speaker mapping, transcript correction, localisation — it uses only `/` and `/summarize`)
-are still in there; trimming them is a separate decision, not a prerequisite. It is a pure FastAPI/httpx
-proxy — no GPU, no PyTorch, ~408 KB of source, deps `httpx fastapi uvicorn python-multipart` plus the
-`wamerican` wordlist the Dockerfile installs.
+`app/llama/` is the former llama-service, merged in. `app/mom.py` builds one `LLMManager` on first use
+and calls `generate_mom()` directly — the exact function the old `/summarize` endpoint wrapped — so the
+result shape reaching `to_mom_response` is unchanged. Merged, not rewritten:
+- Moved **with its folder structure intact**, because it finds `lexicon/` and `localization/glossary.json`
+  relative to its own files.
+- Its internal imports carry a `llama.` prefix (`from llama.config import …`), so `config` still means the
+  service's `app/config.py` everywhere else. The two configs read **no common environment variable**
+  (checked), so neither can silently set the other.
+- Dropped: its FastAPI `main.py`, its Dockerfile, `models/schemas.py` and `core/translation_cache.py` —
+  reachable only from that web server.
+- Safe in the consumer's worker thread: the minutes path is synchronous (only translation was async) and
+  has no Python 3.11-only syntax, so it runs on the service's 3.10 image.
+- The image gains `httpx==0.28.1` (the version it ran on) and the `wamerican` wordlist its term-corrector
+  guard reads. Measured after a full job: the merged process sits at ~85 MiB, so resources are unchanged.
+- `/health` reports the writer as `configured` (endpoint + credential set), not `reachable`: a real model
+  round-trip on every probe would cost time and tokens, and a job surfaces a bad credential anyway.
 
-**Jenkins needs a second job** for it: same repo, build context **`llama/`**, image tag
-`mom-prompt-llama`. The service's own job stays at the repo root.
+Why it is vendored at all: the MoM prompt in `app/llama/prompts.py` has **no environment override**, so
+tuning it for documents rather than transcripts needs this repo's own copy.
+
+**Jenkins: ONE job**, build context the repo root, image `mom-prompt-service`.
 
 The copied files are copies, not imports, because this service is separate from offline-mom-api. When
 one of them changes in `~/offline-mom-api/api` (especially `docx_export.py`), copy the change here too:
@@ -201,9 +214,18 @@ unreachable; 500 the job failed. The body is always the ack.
   the single file they replace, which was cross-checked against the onboarding form. Validated with
   kubeconform in strict mode against the Kubernetes and OpenShift 4.15 schemas — 6 resources, 6
   valid — plus 22 cross-file checks: every secretKeyRef names a key the Secret has, every Secret key
-  is used, each Service selects exactly one Deployment on a port it opens, `LLAMA_URL` resolves to
-  the llama Service, and the Route reaches the service port. Placeholders DevOps must fill:
+  is used, each Service selects exactly one Deployment on a port it opens, and the Route reaches the
+  service port. (Superseded the same day by the one-service merge below.) Placeholders DevOps must fill:
   `CHANGE_ME_REGISTRY` (both images), `CHANGE_ME` (six Secret values, `WATSONX_PROJECT_ID`).
+- **Merged into ONE service, 2026-09-15** — the user's rule (see *ONE service* above). The separate
+  `mom-prompt-llama` pod is gone; the writer runs in process. Verified in the built image: all 13
+  service modules and 8 writer modules import, the two configs stay distinct modules, the lexicon,
+  glossary and wordlist are found at their new paths (31 of 31). End to end with everything real — job
+  `one-001`, `t1.txt` (13,408 chars) + full `mom_meta`: **SUCCESS in 170 s** (263 s through two pods),
+  ack with `accessVar`/`userId`/`isUser` intact, .docx with the CONFIDENTIAL marking, file reference,
+  venue and secretary, Elasticsearch with 7 attendees, 39 key points, 6 decisions, 10 actions. The
+  DevOps YAML is ONE Deployment and ONE Service: 4 resources valid under strict kubeconform, 28 of 28
+  cross-file checks. The onboarding form is one service row and 31 variables, matching the YAML.
 - **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on watsonx.
 
 ## Next steps
@@ -271,15 +293,11 @@ unreachable; 500 the job failed. The body is always the ack.
 
 ## Testing locally
 
-`docker compose up -d` is the whole environment: this service, MinIO, Elasticsearch, Kafka, Kafka UI
-and a minutes writer, on their own network (`mom-prompt_default`), with nothing borrowed from
-`~/offline-mom-api`. The key goes in `.env` (gitignored; `cp .env.example .env`), never in a
-committed file. Ports: service 8010, llama 8011, Kafka UI 8090, MinIO 9000/9001, Elastic 9200,
-Kafka 29092.
-
-**Nothing is borrowed any more.** Both images are built from this repo: `Dockerfile` (the service)
-and `llama/Dockerfile` (the minutes writer). `LLAMA_URL` + `--scale llama=0` points at an existing
-llama-service instead, if you ever want that.
+`docker compose up -d` is the whole environment: ONE service container (with the minutes writer inside
+it), plus MinIO, Elasticsearch, Kafka and Kafka UI, on their own network (`mom-prompt_default`), with
+nothing borrowed from `~/offline-mom-api`. The key goes in `.env` (gitignored; `cp .env.example .env`),
+never in a committed file. Ports: service 8010, Kafka UI 8090, MinIO 9000/9001, Elastic 9200, Kafka 29092.
+One image, built from this repo's `Dockerfile`.
 
 ### The older way, mounting into the audio image
 
@@ -291,6 +309,5 @@ docker run --rm -e PYTHONPATH=/app -e ENABLE_KAFKA=false -v "$PWD/app:/app" -w /
   --entrypoint python offline-mom-api:latest your_check.py
 ```
 
-The local llama-service is the container `offline-mom-llama` on network `offline-mom-api_default`
-(`LLAMA_URL=http://offline-mom-llama:8001`). It calls OpenRouter, which costs credits, so check with fakes
-first and make real calls deliberately.
+The writer calls OpenRouter locally, which costs credits, so check with fakes first and make real calls
+deliberately.

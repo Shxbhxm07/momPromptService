@@ -2,15 +2,11 @@
 #
 #   docker compose up -d
 #
-# Nothing here reaches into another project: its own network, its own MinIO, Elasticsearch,
-# Kafka and Kafka UI, its own .env. The cluster's equivalents live in project `teamsync`
-# (MinIO, Elasticsearch, Kafka) and `trino` (llama-service) and are pointed at by the same
-# environment variable names, so a setting proved here means the same thing there.
-#
-# The minutes writer is built from llama/ in this repo too, so nothing here depends on another
-# project's image or another project's network. To point at an llama-service that is already
-# running instead, set LLAMA_URL in .env and skip this one:
-#     docker compose up -d --scale llama=0
+# ONE service container. The minutes writer runs inside it (app/llama), so there is no second pod,
+# no LLAMA_URL and no HTTP hop. Around it: its own MinIO, Elasticsearch, Kafka and Kafka UI, its own
+# network and its own .env — nothing reaches into another project. The cluster's equivalents live in
+# project `teamsync` (MinIO, Elasticsearch, Kafka) and are pointed at by the same environment variable
+# names, so a setting proved here means the same thing there.
 
 name: mom-prompt
 
@@ -28,8 +24,24 @@ services:
     environment:
       ENABLE_KAFKA: "true"
       JOB_KIND: prompt
-      # Defaults to this project's own llama container; override in .env to use another.
-      LLAMA_URL: ${LLAMA_URL:-http://momp-llama:8001}
+      # ── the minutes writer, in this process ──
+      # Locally it calls OpenRouter; on the cluster the same variables point at IBM watsonx.
+      APP_MODE: online
+      VLLM_API_BASE: https://openrouter.ai/api/v1
+      LLM_MODEL_PATH: ${LLM_MODEL:-meta-llama/llama-3.3-70b-instruct}
+      # Named for Groq for historical reasons; it is just "Authorization: Bearer <key>".
+      GROQ_API_KEYS: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env — copy .env.example}
+      # Llama emits no reasoning tokens; the output budgets key on this.
+      LLM_IS_REASONING: "false"
+      MODEL_CONTEXT_LIMIT: "131072"
+      # WHICH HOSTS MAY SERVE THE MODEL. Unpinned, OpenRouter spreads identical calls across hosts
+      # running different quantisations, so quality varies for reasons unrelated to this service. But
+      # pinning ONE host fails every call the moment it is busy (DeepInfra, 2026-09-15: 429 "rate-limited
+      # upstream" on the first request, 20 times running). The writer sends allow_fallbacks=false, so
+      # OpenRouter tries exactly these hosts, in order. Both match on fp8 quantisation and the 131,072
+      # context (checked against /models/<model>/endpoints). DeepInfra is left out at the user's request.
+      LLM_PROVIDER_ORDER: AkashML,Parasail
+      MOM_WINDOW_KEY_POINTS: "true"
       KAFKA_BOOTSTRAP: momp-kafka:9092
       KAFKA_JOB_TOPIC: mom-prompt.jobs
       KAFKA_ACK_TOPIC: mom-prompt.acks
@@ -44,51 +56,6 @@ services:
     ports:
       - "${SERVICE_PORT:-8010}:8000"
     restart: unless-stopped
-
-  # ── the minutes writer ───────────────────────────────────────────────────────
-  # This repo's own copy (llama/), run in ONLINE mode (OpenRouter). The key variable is named for
-  # Groq for historical reasons; it is just "Authorization: Bearer <key>", which OpenRouter takes too.
-  llama:
-    build: ./llama
-    image: mom-prompt-llama:local
-    container_name: momp-llama
-    environment:
-      APP_MODE: online
-      VLLM_API_BASE: https://openrouter.ai/api/v1
-      LLM_MODEL_PATH: ${LLM_MODEL:-meta-llama/llama-3.3-70b-instruct}
-      GROQ_API_KEYS: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env — copy .env.example}
-      # Llama emits no reasoning tokens; without this the token budgets collapse.
-      LLM_IS_REASONING: "false"
-      MODEL_CONTEXT_LIMIT: "131072"
-      # WHICH HOSTS MAY SERVE THE MODEL. Unpinned, OpenRouter spreads identical calls across hosts
-      # running different quantisations, so quality varies for reasons unrelated to this service.
-      # But pinning ONE host (the old "DeepInfra") fails every call the moment that host is busy —
-      # on 2026-09-15 DeepInfra answered 429 "rate-limited upstream" to the very first request, 20
-      # times running, while the same model unpinned answered 200. The writer sends
-      # allow_fallbacks=false, so OpenRouter tries exactly these hosts, in order, and no others.
-      # They match on BOTH counts that matter (checked against OpenRouter's
-      # /models/<model>/endpoints on 2026-09-15):
-      #     fp8 quantisation   — the same weights, so the same answers
-      #     131,072 context    — Cloudflare is fp8 too but stops at 24,000, which a long transcript
-      #                          passes; a fallback that silently fails on big jobs is worse than none
-      # DeepInfra also matches and is deliberately left out, at the user's request: it was the host
-      # refusing every call on 2026-09-15. The model is the same either way — Llama 3.3 70B; a host
-      # is only whose machines run it.
-      # Re-check that endpoint before adding a host: a provider's quantisation can change.
-      LLM_PROVIDER_ORDER: AkashML,Parasail
-      MOM_WINDOW_KEY_POINTS: "true"
-    # No dictionary bind mount: llama/Dockerfile installs `wamerican` into the image, so the
-    # over-correction guard keeps its full wordlist wherever this runs, not only on this machine.
-    ports:
-      - "${LLAMA_PORT:-8011}:8001"
-    restart: unless-stopped
-    healthcheck:
-      # "/" is static; /health round-trips to the LLM and would cost a call every 15 s.
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/',timeout=5).status==200 else 1)"]
-      interval: 15s
-      timeout: 10s
-      retries: 12
-      start_period: 20s
 
   # ── object storage: the documents in, the .docx out ──────────────────────────
   minio:

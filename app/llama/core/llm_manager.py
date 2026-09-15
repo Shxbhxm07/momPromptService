@@ -6,7 +6,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 import time
 
-from config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOKENS,
+from llama.config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOKENS,
                     MAX_NEW_TOKENS_PER_CHUNK, MAX_NEW_TOKENS_SYNTHESIS, MODEL_CONTEXT_LIMIT,
                     MAX_NEW_TOKENS_EXTRACTION, MAX_NEW_TOKENS_CLASSIFY, MOM_MERGE_ITEMS, MOM_VERIFY_DECISIONS,
                     LLM_MODEL_LONG, VLLM_API_BASE_LONG, LLM_LONG_THRESHOLD_TOKENS,
@@ -14,11 +14,11 @@ from config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOKENS,
                     WATSONX_VERSION, IBM_IAM_URL, LLM_AUTH_MODE, LLM_VERIFY_SSL,
                     CP4D_AUTH_URL, CP4D_USERNAME, CP4D_API_KEY, CP4D_TOKEN_TTL, MOM_WINDOW_KEY_POINTS, WINDOW_CONCURRENCY,
                     LLM_CONCURRENCY)
-from core.groq_key_pool import load_pool_from_env
-from core.translation_validator import validate_translation
-from prompts import MEETING_ANALYSIS_PROMPT, SYNTHESIS_PROMPT, MEETING_ANALYSIS_PROMPT_JSON, SYNTHESIS_PROMPT_JSON, SPEAKER_MAPPING_PROMPT, DECISIONS_EXTRACTION_PROMPT, KEY_POINTS_EXTRACTION_PROMPT, WINDOW_EXTRACTION_PROMPT, SUMMARY_FROM_POINTS_PROMPT, FIGURES_EXTRACTION_PROMPT, TRANSCRIPT_CORRECTION_PROMPT, ITEMS_MERGE_PROMPT, DECISIONS_VERIFY_PROMPT, TRANSLATED_TRANSCRIPT_CORRECTION_PROMPT, ACTION_ITEMS_EXTRACTION_PROMPT, MEETING_TYPE_CLASSIFY_PROMPT, TEMPLATE_FOCUS
-from utils.text_utils import chunk_transcript, clean_mom_output, preprocess_transcript
-from localization.mom_i18n import parse_and_validate, parse_content, render_mom, GLOSSARY_DNT, GLOSSARY_TERMS
+from llama.core.groq_key_pool import load_pool_from_env
+from llama.core.translation_validator import validate_translation
+from llama.prompts import MEETING_ANALYSIS_PROMPT, SYNTHESIS_PROMPT, MEETING_ANALYSIS_PROMPT_JSON, SYNTHESIS_PROMPT_JSON, SPEAKER_MAPPING_PROMPT, DECISIONS_EXTRACTION_PROMPT, KEY_POINTS_EXTRACTION_PROMPT, WINDOW_EXTRACTION_PROMPT, SUMMARY_FROM_POINTS_PROMPT, FIGURES_EXTRACTION_PROMPT, TRANSCRIPT_CORRECTION_PROMPT, ITEMS_MERGE_PROMPT, DECISIONS_VERIFY_PROMPT, TRANSLATED_TRANSCRIPT_CORRECTION_PROMPT, ACTION_ITEMS_EXTRACTION_PROMPT, MEETING_TYPE_CLASSIFY_PROMPT, TEMPLATE_FOCUS
+from llama.utils.text_utils import chunk_transcript, clean_mom_output, preprocess_transcript
+from llama.localization.mom_i18n import parse_and_validate, parse_content, render_mom, GLOSSARY_DNT, GLOSSARY_TERMS
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class LLMManager:
         """Tier-1 deterministic corrector for the org's core vocabulary. Disabled gracefully on error."""
         try:
             import os
-            from core.term_corrector import TermCorrector
+            from llama.core.term_corrector import TermCorrector
             base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lexicon")
             return TermCorrector(os.path.join(base, "core_terms.json"),
                                  os.path.join(base, "common_words.txt"))
@@ -356,7 +356,7 @@ class LLMManager:
         if LLM_AUTH_MODE == "cp4d":
             cache = self._iam_tokens.get("cp4d")
             if cache is None:
-                from core.ibm_auth import CP4DTokenCache
+                from llama.core.ibm_auth import CP4DTokenCache
                 cache = self._iam_tokens["cp4d"] = CP4DTokenCache(
                     CP4D_AUTH_URL, CP4D_USERNAME, CP4D_API_KEY or key,
                     ttl=CP4D_TOKEN_TTL, verify=LLM_VERIFY_SSL)
@@ -364,7 +364,7 @@ class LLMManager:
         if LLM_AUTH_MODE == "iam":
             cache = self._iam_tokens.get(key)
             if cache is None:
-                from core.ibm_auth import IAMTokenCache
+                from llama.core.ibm_auth import IAMTokenCache
                 cache = self._iam_tokens[key] = IAMTokenCache(key, iam_url=IBM_IAM_URL, verify=LLM_VERIFY_SSL)
             return cache.token()
         return key
@@ -1474,7 +1474,7 @@ class LLMManager:
     def _parse_points(raw, i, total):
         """Parse a window response, falling back to the deterministic repairs already in the
         renderer before declaring the slice lost."""
-        from localization.mom_i18n import _extract_json, _repair_json
+        from llama.localization.mom_i18n import _extract_json, _repair_json
 
         def objects(text):
             # Last resort: every complete {...} carrying a "text" key, wherever it sits. Without the

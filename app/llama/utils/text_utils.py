@@ -1,7 +1,7 @@
 import re
 import difflib
 import logging
-from config import CHUNK_SIZE_CHARS
+from llama.config import CHUNK_SIZE_CHARS
 
 logger = logging.getLogger(__name__)
 

@@ -17,3 +17,6 @@ Pillow==12.3.0
 minio==7.2.7
 elasticsearch==8.14.0
 kafka-python==2.0.2
+# The minutes writer (app/llama) calls the LLM with httpx. Pinned to the version it ran on as a
+# separate service, so merging it in changes nothing about how it talks to the model.
+httpx==0.28.1

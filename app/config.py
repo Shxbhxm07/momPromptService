@@ -3,8 +3,10 @@ the default are the same as in ~/offline-mom-api/api/config.py, so one set of cl
 import os
 
 # ── the minutes writer ─────────────────────────────────────────────────────────
-LLAMA_URL = os.getenv("LLAMA_URL", "http://llama-service:8001").rstrip("/")
-MOM_TIMEOUT = int(os.getenv("MOM_TIMEOUT", "3600"))
+# The writer runs in this process (the `llama` package); its endpoint, model, credentials and budgets
+# are read by llama/config.py — VLLM_API_BASE, LLM_MODEL_PATH, LLM_AUTH_MODE, CP4D_*, WATSONX_API_KEY
+# and the rest. Only the one setting this service passes to it on each call lives here. There is no
+# LLAMA_URL any more: nothing is reached over HTTP.
 MOM_TEMPERATURE = float(os.getenv("MOM_TEMPERATURE", "0.05"))
 
 # ── what a job may carry ───────────────────────────────────────────────────────

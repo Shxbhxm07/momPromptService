@@ -1,57 +1,87 @@
-"""The user's prompt and documents → structured Minutes of Meeting, via llama-service's /summarize.
+"""The user's prompt and documents → structured Minutes of Meeting, written in this process.
 
-No prompt of our own. /summarize already writes the minutes as the structured `content` object the
-JSSD renderer reads, with the validate-and-repair retry and the passes that re-ask the model when
-decisions or action items come back empty. It was built for meeting transcripts; job.compose_source
-labels the user's request and each document so the model reads them as a request and as source
-material rather than as something said in a meeting. Whether that is good enough is not yet measured,
-see CLAUDE.md.
+The minutes writer is the `llama` package beside this module — the code that used to run as a
+separate llama-service. It is called directly: no HTTP hop, no second pod, no LLAMA_URL. Everything
+this service needs runs in one container.
 
-The mapping below (to_mom_response) is copied unchanged from ~/offline-mom-api/api/core/mom.py, so minutes from a
-prompt and minutes from a recording reach the renderer and Elasticsearch in exactly the same shape.
+No prompt of our own. The writer produces the minutes as the structured `content` object the JSSD
+renderer reads, with the validate-and-repair retry and the passes that re-ask the model when decisions
+or action items come back empty. It was built for meeting transcripts; minutes.compose_source labels
+the user's request and each document so the model reads them as a request and as source material
+rather than as something said in a meeting.
+
+The mapping below (to_mom_response) is copied unchanged from ~/offline-mom-api/api/core/mom.py, so minutes
+from a prompt and minutes from a recording reach the renderer and Elasticsearch in exactly the same shape.
 """
 import logging
 import re
+import threading
 from typing import Any, Dict, List, Optional
 
-import requests
-
-from config import LLAMA_URL, MOM_TEMPERATURE, MOM_TIMEOUT
+from config import MOM_TEMPERATURE
 
 logger = logging.getLogger(__name__)
 
+# One writer for the whole process. It holds an httpx connection pool, a token cache and the loaded
+# term lexicon, all of which are worth building once rather than per job.
+_writer = None
+_writer_lock = threading.Lock()
+
+
+def _get_writer():
+    """The writer, built and connectivity-checked on first use.
+
+    NOT at import or startup, for the same reason setup.py builds MinIO and Elasticsearch lazily: an
+    LLM endpoint that is down must not stop the pod coming up, or /health cannot be reached to say why.
+    The first job that needs it reports the failure in its acknowledgement instead.
+
+    Imported here rather than at module top so that importing this module stays free of the writer's
+    dependencies — the renderer and tests that only need to_mom_response do not pull in httpx.
+    """
+    global _writer
+    with _writer_lock:
+        if _writer is None:
+            from llama.core.llm_manager import LLMManager
+            w = LLMManager()
+            # Verifies the credential and, off watsonx, that the model exists. Raises on a wrong model
+            # id rather than silently answering with another one.
+            w.load_model()
+            _writer = w
+        return _writer
+
 
 class MomGenerator:
-    """llama-service's /summarize, and a cheap liveness check."""
-
-    def __init__(self, base_url: str = LLAMA_URL):
-        self.base_url = base_url
-        self.session = requests.Session()
+    """Writes the minutes, in process."""
 
     def is_ready(self) -> bool:
-        """'/' is static; llama-service's /health calls the model and is too slow to probe per request."""
-        try:
-            return self.session.get(f"{self.base_url}/", timeout=5).status_code == 200
-        except requests.RequestException:
-            return False
+        """Is the writer configured to reach a model? No network call.
+
+        The old check was an HTTP GET to a second pod. Here there is nothing to reach until a job runs,
+        and a real round-trip to the model on every /health probe would cost time and tokens. So this
+        reports whether an endpoint and a credential are configured; a job still surfaces a wrong one.
+        """
+        from llama import config as lc
+        from llama.core.groq_key_pool import KEY_VARS
+        import os
+        has_key = any(os.getenv(v, "").strip() for v in KEY_VARS)
+        has_cp4d = bool(lc.CP4D_AUTH_URL and lc.CP4D_USERNAME and lc.CP4D_API_KEY)
+        return bool(lc.VLLM_API_BASE) and (has_key or has_cp4d)
+
+    @staticmethod
+    def describe() -> Dict[str, str]:
+        """The endpoint and model, for the startup log and /health."""
+        from llama import config as lc
+        return {"url": lc.VLLM_API_BASE, "model": lc.LLM_MODEL_PATH}
 
     def generate(self, text: str, metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        """The full /summarize payload: `content` (structured) and `analysis` (rendered text).
+        """The full result: `content` (structured) and `analysis` (rendered text).
 
-        `metadata` is {date, time, venue} when the job states them; llama-service then uses those
-        rather than whatever the text suggests. English only, as in the audio service.
+        `metadata` is {date, time, venue} when the job states them; the writer then uses those rather
+        than whatever the text suggests. English only, as in the audio service.
         """
-        payload: Dict[str, Any] = {"text": text, "temperature": MOM_TEMPERATURE, "output_lang": "English"}
-        if metadata:
-            payload["metadata"] = metadata
-        logger.info(f"[MOM] POST {self.base_url}/summarize ({len(text)} chars)")
-        try:
-            r = self.session.post(f"{self.base_url}/summarize", json=payload, timeout=MOM_TIMEOUT)
-        except requests.RequestException as e:
-            raise RuntimeError(f"Cannot reach llama-service at {self.base_url}: {e}") from e
-        if r.status_code != 200:
-            raise RuntimeError(f"llama-service error {r.status_code}: {r.text[:300]}")
-        result = r.json()
+        writer = _get_writer()
+        logger.info(f"[MOM] writing minutes in process ({len(text)} chars)")
+        result = writer.generate_mom(text, MOM_TEMPERATURE, "English", metadata or None)
         logger.info(f"[MOM] ✓ generated (chunks={result.get('chunks_used')})")
         return result
 

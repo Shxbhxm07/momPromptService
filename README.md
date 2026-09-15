@@ -11,7 +11,7 @@ service (`~/offline-mom-api/docs/kafka-contract.md`), plus one field: `prompt`.
 - **Run only:** one container; it serves HTTP on 8000 and consumes Kafka in the same process.
 - **Kafka:** jobs on `mom-prompt.jobs`, acknowledgements on `mom-prompt.acks` (`KAFKA_JOB_TOPIC`, `KAFKA_ACK_TOPIC`).
 - **HTTP:** `POST /v1/mom-prompt` with the same JSON as a Kafka job returns the acknowledgement. `GET /docs` shows examples.
-- **Needs:** llama-service (`LLAMA_URL`), MinIO (`MINIO_*`), Elasticsearch (`ELASTIC_*`, `CHUNK_INDEX`). All settings are in `app/config.py`.
+- **Needs:** an LLM endpoint for the in-process minutes writer (`VLLM_API_BASE`, `LLM_MODEL_PATH`, credentials), MinIO (`MINIO_*`), Elasticsearch (`ELASTIC_*`, `CHUNK_INDEX`). All settings are in `app/config.py`.
 - **OpenShift:** apply `deploy/openshift/01-secret.yaml` → `02-deployment.yaml` → `03-service.yaml` → `04-route.yaml`, in order. Keep the route's 3600 s timeout, because a job holds the request open until the minutes are written.
 
 ## Layout
@@ -25,10 +25,11 @@ app/  config.py          every setting, from env
       kafka_consumer.py  the Kafka loop: one job at a time, commit after the ack
       minutes.py         the job: read documents, build the text, get minutes, store, index, ack
       kafka_contract.py  the inbound message and the acknowledgement
-      setup.py           MinIO / Elasticsearch / llama-service clients, made on first use
+      setup.py           MinIO / Elasticsearch / minutes-writer clients, made on first use
       document_checker.py  is this attachment readable, and small enough
       logger_config.py   log format and level (UTC; the user reads IST = UTC+5:30)
-      mom.py             calls llama-service /summarize, maps its answer to the MoM shape
+      mom.py             runs the minutes writer in process, maps its answer to the MoM shape
+      llama/             the minutes writer (prompts, LLM calls) — a package, not a separate service
       minio_client.py    MinIO
       es_client.py       Elasticsearch: the minutes record and the search chunks
       documents.py       PDF / DOCX / DOC / TXT → text, with OCR for scanned pages
@@ -52,15 +53,12 @@ one changes there, `cp` it here and nothing else has to be touched.
 | Kafka UI | http://localhost:8090 |
 | MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 | Elasticsearch | http://localhost:9200 |
-| minutes writer | http://localhost:8011/health |
 
 Topics `mom-prompt.jobs` / `mom-prompt.acks` and the `mom` bucket are created on first start.
 Upload a PDF/DOCX/DOC/TXT to `mom/mom-docs/` in the MinIO console, then produce a job in Kafka UI
 on `mom-prompt.jobs` and read the acknowledgement on `mom-prompt.acks`.
 
-The only thing not built from this repo is the minutes writer image: on the cluster llama-service
-is ONE Deployment shared by this service, mom-consumer and translate-consumer, so it is used here
-the same way minio and kafka are — a prebuilt image reached by URL. To point at one that is already
-running instead, set `LLAMA_URL` in `.env` and start with `docker compose up -d --scale llama=0`.
+**One service.** The minutes writer runs inside the service container — there is no separate LLM
+pod and no `LLAMA_URL`. One image, one Deployment.
 
 See `CLAUDE.md` for how it works, its status and what is next.

@@ -19,7 +19,7 @@ import kafka_consumer
 import logger_config
 import minutes
 import setup
-from config import ENABLE_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC, LLAMA_URL
+from config import ENABLE_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC
 from kafka_contract import build_ack, parse_job
 from mom import MomGenerator
 
@@ -34,8 +34,9 @@ app = FastAPI(title="MoM from prompt",
 def _startup():
     if ENABLE_KAFKA:
         kafka_consumer.start()
+    w = MomGenerator.describe()
     logger.info(f"✓ Ready | job={JOB_KIND} | kafka={'on' if ENABLE_KAFKA else 'off'} "
-                f"| minutes writer {LLAMA_URL}")
+                f"| minutes writer in process: {w['model']} at {w['url']}")
 
 
 @app.on_event("shutdown")
@@ -57,7 +58,9 @@ def health():
     llm_ok = MomGenerator().is_ready()
     return {
         "status": "healthy" if llm_ok and (kafka_consumer.is_alive() or not ENABLE_KAFKA) else "degraded",
-        "minutes_writer": {"url": LLAMA_URL, "reachable": llm_ok},
+        # In process, so "configured" rather than "reachable": an endpoint and a credential are set.
+        # A round-trip to the model on every probe would cost time and tokens; a job surfaces a bad one.
+        "minutes_writer": {"in_process": True, **MomGenerator.describe(), "configured": llm_ok},
         "kafka": {"enabled": ENABLE_KAFKA, "consumer_running": kafka_consumer.is_alive(),
                   "jobs": KAFKA_JOB_TOPIC, "acks": KAFKA_ACK_TOPIC},
     }
