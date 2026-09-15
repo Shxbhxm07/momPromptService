@@ -72,7 +72,21 @@ _UNGRADED = {"", "UNCLASSIFIED", "UNCLAS", "NONE", "NIL"}
 _PAGES_SHOWN = {"TOP SECRET", "SECRET", "CONFIDENTIAL"}      # Part 1 App B note 2
 _COPY_IN_WATERMARK = {"TOP SECRET", "SECRET"}                # Part 1 para 12.1
 
-_EMPTY = {"", "none", "n/a", "na", "nil", "unknown", "not specified", "not stated", "not mentioned", "-"}
+# Values that mean "the model had nothing here". They arrive as prose because /summarize asks for a
+# field and the model answers honestly rather than leaving it blank, so "None stated" comes back where
+# a date belongs. Untrapped they are appended verbatim and the minutes read "...department by None
+# stated." — a JSSD document stating a deadline that does not exist. Matched after _clean() has
+# collapsed whitespace, stripped surrounding dots and lowercased, so list only that normalised form.
+# NOT trapped, deliberately: "asap", "immediate", "ongoing" — vague, but they are what was said.
+_EMPTY = {"", "-", "--", "—", "n/a", "n.a", "na", "nan", "nil", "null", "undefined",
+          "none", "none stated", "none given", "none specified", "none mentioned", "none provided",
+          "no date", "no due date", "no deadline", "no timeline", "no owner", "no action",
+          "not specified", "not stated", "not mentioned", "not given", "not applicable",
+          "not available", "not determined", "not decided", "not yet decided", "not yet determined",
+          "not defined", "not assigned", "not discussed",
+          "tbd", "tba", "tbc", "to be decided", "to be determined", "to be confirmed",
+          "to be advised", "to be announced", "to be intimated",
+          "unknown", "unspecified", "undecided", "undetermined", "unassigned", "pending"}
 # "Secretary" alone is how the pipeline labels the meeting's secretary; "Secretary (Defence)" and the
 # like are appointments, not the minute-taker, so only the bare word or an explicit phrase counts.
 _CHAIR = re.compile(r"(the )?(chair|chairman|chairperson|chairwoman|presiding officer)", re.I)

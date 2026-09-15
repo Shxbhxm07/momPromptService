@@ -67,6 +67,14 @@ Those three are **byte-identical** and stay that way, because they import nothin
 which is why flattening the tree cost nothing. `mom.py` and `es_client.py` are adapted (the
 transcript and translation parts removed), so those two need a diff, not a cp.
 
+**`docx_export.py` has diverged since 2026-09-15**: the placeholder fix below was made HERE first.
+The audio service has the same bug, so the copy has to go the other way once, then they are identical
+again and the usual direction resumes:
+
+```
+cp app/docx_export.py ~/offline-mom-api/api/utils/docx_export.py     # then commit in that repo too
+```
+
 ## The contract
 
 **In** (Kafka message or HTTP body), the same fields as `mom.jobs`:
@@ -113,6 +121,26 @@ unreachable; 500 the job failed. The body is always the ack.
   Only `file_urls` points at a document instead of an .mp3, and `prompt` may be added. Confirmed by
   parsing the audio service's own example message here. Topics stay separate (`mom-prompt.*`) so an
   .mp3 never reaches this service and a .pdf never reaches the audio one.
+- **Measured against the JSSD manual on 2026-09-15** (`JSSD_VOLUME1_PART2`, Appendix AD p.328-330,
+  rules Ch 6 paras 9-19). The skeleton is right: numbering, `The following were present:-`,
+  INTRODUCTION, the centred `ITEM I – …` with its bracketed classification, Action/Info headings,
+  `Decision.` prefix, amendments-by line, left-aligned signature block, distribution ending in File,
+  Arial 12, a real PAGE field, and a 1.30 in left margin (0.5 in + a 0.8 in mirrored gutter) — all
+  match the specimen. What does NOT match, and why:
+    - **One `ITEM I` only.** AD wants one item per agenda entry (Ch 6 para 16.7), each ending in its
+      own decision (16.14). /summarize returns flat lists with no link to the agenda, so `_items()`
+      can only make one. Needs a llama-service change; see Next steps 5.
+    - **Action/Info columns mostly empty** (16.8, 16.16, mandatory). The renderer already maps
+      `action_items[].assigned_to` into Action — the model simply leaves it blank, and `decisions`
+      has no owner field at all. Same root cause.
+    - **Decisions are past tense** ("Resolution … passed") where 16.9 and 16.15 want the future
+      imperative prefaced "It was decided". Prompt-level.
+    - **No Secretary in the attendee list** (AD note 3, 16.4 — the secretary is always listed last).
+    - Title carries no date, time or venue (AD note 2, mandatory) unless `mom_meta` supplies them.
+- **Fixed 2026-09-15**: placeholder answers from the model leaked into the minutes — a real document
+  read "…to fund the sheriff's department **by None stated**." `_clean` trapped "none" and "not
+  stated" but not "None stated", "TBD" or "to be decided". `_EMPTY` in `docx_export.py` now covers
+  that family; "asap", "immediate" and "ongoing" are deliberately kept, being what was actually said.
 - **Not yet**: built as its own image, deployed, run against real Kafka/MinIO/Elastic, or tried on
   watsonx (the cluster's model, `ibm/granite-4-h-small`).
 
