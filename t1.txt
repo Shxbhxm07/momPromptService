@@ -1,0 +1,279 @@
+0:00
+0 seconds
+okay all right good to go you want to lead us off John I think you have the
+0:07
+7 seconds
+first item yeah thanks dad so hey welcome everybody would like to give me cold warm welcome Nico is joining us today as a new front-end
+0:15
+15 seconds
+engineer on the package team we're very excited to have you Nico Nico I know you just did this but would you mind just giving us a real quick snippet about
+0:23
+23 seconds
+yourself another fellow so I'm Nico my name is Nicola but Nick was perfect for everybody
+0:32
+32 seconds
+before he flamboyance I was working in pull ups so I guess lava sticks with me I'm really in love with you Jas and I
+0:41
+41 seconds
+maintain some open source packages and I'm really excited start Mika we are super excited you're here thank you for
+0:49
+49 seconds
+that and welcome awesome thanks Dan over to you welcome to Nico it's it's great
+0:55
+55 seconds
+to have you on the team and I next item was issue herda for doing async issues weight estimates so we've been walking
+1:03
+1 minute, 3 seconds
+through you know adding to our very lightweight process as we need to add it as we've seen gaps the plan is to sort
+1:11
+1 minute, 11 seconds
+of do it as little effort as we can and then just start working on things and as we see gaps we're going to start adding you know processes if if we feel like
+1:18
+1 minute, 18 seconds
+they're necessary I recently we agreed to do sort of t-shirt sizing on all the issues that was going to happen the day before the
+1:25
+1 minute, 25 seconds
+17th to the 16th then we're going to finalize what's deliverable on the 17th before we actually kick off work on the
+1:32
+1 minute, 32 seconds
+18th of our new milestones I would like to see everyone's feedback and I see people have already commented in the
+1:42
+1 minute, 42 seconds
+agenda but I think what we want to do is to decide if we feel like this is helpful happy to wait for the next milestone to see if people are like
+1:50
+1 minute, 50 seconds
+really concerned about the way we decided to already do the light weight issue waiting effort that we have I
+1:58
+1 minute, 58 seconds
+prefer to iterate on things and not just add a whole bunch of process unless there's a clear reason why we're adding it and that's kind of why I'm sort of saying how you go take a look at this
+2:06
+2 minutes, 6 seconds
+tool John's used it so John can answer questions better than I can with the issue header and so
+2:13
+2 minutes, 13 seconds
+yeah just flag that Reverend go take a look at that tool if you don't have access Darby or myself I have to reach
+2:20
+2 minutes, 20 seconds
+out to Darby people thank you too cool I think you have the next item as well and
+2:29
+2 minutes, 29 seconds
+if people want to discuss that further just sort of issue her to further just to get up John and package channel did
+2:37
+2 minutes, 37 seconds
+he said he'd do a demo for us yeah the next item John yeah thanks Dan yeah please please reach out for issue heard her might can give you a
+2:45
+2 minutes, 45 seconds
+walkthrough how why we built it what it does all that good stuff next point is just a silly truck or a silly point
+2:52
+2 minutes, 52 seconds
+we're saying hi to chuck chuck is a good friend who's been sometimes follows our meetings on YouTube so I check my check
+3:02
+3 minutes, 2 seconds
+over to Steve thanks everybody yeah I was just thinking or last week to realize that this might be like savings
+3:11
+3 minutes, 11 seconds
+coming up and realize that maybe not all of ours line up so thought I'd be maybe a good idea to know when that might
+3:19
+3 minutes, 19 seconds
+happen for some people and whether or not that affects any of these meeting times in any particular way but it looks
+3:27
+3 minutes, 27 seconds
+like some people have started to just post their dates and just something to keep in mind those we kind of reached the end of October and a month or so
+3:36
+3 minutes, 36 seconds
+cool yeah it's good cool that state thanks to that nice job I will add mine
+3:43
+3 minutes, 43 seconds
+as well people want to go through and add that to the agenda I mean it will just happen with our meetings and everything in terms of them sliding but
+3:52
+3 minutes, 52 seconds
+they won't move automatically so it's a good is a really good point um we do have a sync meetings for a reason so if they turn into a time that doesn't work
+4:00
+4 minutes
+the people then we should be able to attend as best as we can with the meeting notes and then watching the meeting just for anyone they can't make
+4:07
+4 minutes, 7 seconds
+meeting I'm just as the friendly reminder that you should consider that meeting the next day that you're available or working you should consider
+4:16
+4 minutes, 16 seconds
+that a meeting that you watch as your meeting and take that time 30 minutes or whatever it is 25 minutes to sit down
+4:23
+4 minutes, 23 seconds
+and actually review what's in the agenda and then what actually happened on the call just because if you don't you're just going to lose connection with what's happening in the
+4:31
+4 minutes, 31 seconds
+team and that's why we have the async set up so okay and the next item is mine
+4:38
+4 minutes, 38 seconds
+there's a discussion that I linked to here of going around iterating on our infrared dev escalation process to
+4:46
+4 minutes, 46 seconds
+remove the weekend on-call element of that for now there are a lot of if you look through that thread I Tim if you
+4:56
+4 minutes, 56 seconds
+look through that thread you'll find that the initial issue was raised to say hey let's iterate and remove this because there are a bunch of actual
+5:03
+5 minutes, 3 seconds
+legal considerations around people working on weekends in some countries without you know being paid and so there's a lot of considerations to the
+5:11
+5 minutes, 11 seconds
+iteration there being proposes to remove the weekend element of on-call which might make some people feel a little
+5:19
+5 minutes, 19 seconds
+happier because they don't have to be on call and weekends I don't blame people for cooling happier that way so go check
+5:28
+5 minutes, 28 seconds
+that out if you're interested I spend a heap of time on it but there's already a consensus if I'd look at that we may be pulling the weekend on-call
+5:35
+5 minutes, 35 seconds
+out and then we're looking at the the
+5:44
+5 minutes, 44 seconds
+next item I had was the way you moved forward on the community contribution for composer which is the PHP package
+5:53
+5 minutes, 53 seconds
+manager GG's taking a look at that and I did see a massive commit going to that over the weekend so many sermon he
+6:02
+6 minutes, 2 seconds
+commits just like you gmail said so maybe that's going to start moving I'm following that mr so that I can get notifications when stuff happens on it
+6:09
+6 minutes, 9 seconds
+because I really would love to see that move move forward because you know when the community spends time contributing it's obviously important that we we
+6:17
+6 minutes, 17 seconds
+support them as best as we can so I feel like that one's pretty well answered so far and on to you axel yeah thanks so
+6:27
+6 minutes, 27 seconds
+whether you put that together with requests about improving my navigation of the pockets features so right now they are all under one roof because
+6:36
+6 minutes, 36 seconds
+before they were scheduled a place so I think this is gonna improve things has
+6:43
+6 minutes, 43 seconds
+been suggested and I think this year will be a magic question I'll review up if you want to take it out and leave
+6:51
+6 minutes, 51 seconds
+something buckling on so yeah that's it for me that's great thank you very much for that Axl and
+6:58
+6 minutes, 58 seconds
+welcome to you I think the first meeting you've been to yep hey it's nice to have
+7:05
+7 minutes, 5 seconds
+you here welcome yeah and then I have the last thing there is a back-end
+7:13
+7 minutes, 13 seconds
+weekly cold it goes on it's tomorrow morning my time which is UTC minus seven if you look at the team meetings you'll
+7:21
+7 minutes, 21 seconds
+actually be able to find that and this is mostly for you Steve and Gigi as GG's
+7:28
+7 minutes, 28 seconds
+watching this hi Gigi just go check that meeting out it's worth going to Tim Zalman raised this
+7:38
+7 minutes, 38 seconds
+with me that we should be thinking about investing in that and they're going to start broadening the scope of it hopefully to perhaps be maybe something
+7:45
+7 minutes, 45 seconds
+that's like here's some tips and tricks here's how this works it's like that type of like environment set up for that so I definitely go check that I'm probably gonna go to a few of
+7:53
+7 minutes, 53 seconds
+those if I can as well just to sort of see how it flows but it's something that we don't have a lot of clear coms about across the orb so just flagging that for
+8:02
+8 minutes, 2 seconds
+people if you can't find it oh I will let's let's chat in package there's a
+8:09
+8 minutes, 9 seconds
+there's also a link in the description of the back ends channel there's a link for the back end call which includes the
+8:18
+8 minutes, 18 seconds
+agenda document okay have you been going to that mm-hmm nice and and how is that
+8:25
+8 minutes, 25 seconds
+something that you find helpful so far yeah I mean it's very back and forth like some weeks it doesn't even really
+8:32
+8 minutes, 32 seconds
+happen because nobody puts anything on the agenda and then other weeks a few people will show up and read from some
+8:39
+8 minutes, 39 seconds
+other people's notes but it's I like it just to you know get a little face time with some people in other areas
+8:46
+8 minutes, 46 seconds
+nice yeah so I would say that it sounds like as an old way and trying to invest a little bit more in that meeting so maybe you have a think about
+8:55
+8 minutes, 55 seconds
+what you think could be really useful there and there's a suggestion of like I said tips and tricks and one only even making it somewhat of a social thing if
+9:04
+9 minutes, 4 seconds
+there wasn't any tips and tricks I think there's problems with scaling once you get the tipping points once you go through scaling of social things where
+9:12
+9 minutes, 12 seconds
+it gets to like ten people in it there's just too many people for anyone to really feel like they're getting social value out of something I think
+9:20
+9 minutes, 20 seconds
+but that's something definitely worth looking at thank you for that and maybe think about any other items you want to suggest for that like in that realm of
+9:29
+9 minutes, 29 seconds
+like hey how should this work you know maybe there's ideas of like here's a cool mr here's an issue here is our resolve this whatever ideas you think if
+9:36
+9 minutes, 36 seconds
+you use oh and maybe put them forward in the back in channel I don't have to be the conduit for that cool questions for
+9:47
+9 minutes, 47 seconds
+anyone that's the end of our items in our agenda does anyone have anything
+9:51
+9 minutes, 51 seconds
+else they want a raise or quote amount
+10:00
+10 minutes
+of silence yes all add something for the we have a front-end weekly call as well
+10:07
+10 minutes, 7 seconds
+and Dan it is hard to kind of scale in that social level so one thing we've been doing recently is every month we'll
+10:15
+10 minutes, 15 seconds
+do a front-end themed call where it gives everybody an opportunity to like like someone will pick like what's your favorite movie what's your favorite book and everybody lists that stuff out and
+10:23
+10 minutes, 23 seconds
+then everybody votes and chooses a winner and then the winner picks the next the next theme for next month so
+10:30
+10 minutes, 30 seconds
+it's been kind of a fun way to to have some social interaction on a larger scale so just want to throw that out there is there's an idea yeah Tim
+10:39
+10 minutes, 39 seconds
+mention that to me as well yeah I mean I'm I'm not trying to set what people do
+10:47
+10 minutes, 47 seconds
+in there and what people find interesting out of those calls but I think that's a good suggestion Tim said that we there's there's probably going
+10:56
+10 minutes, 56 seconds
+to be an effort maybe in a couple of weeks to get a few you engineering managers together the sort of he'll start seeding what's in the back end Cole just because it sounds like the
+11:03
+11 minutes, 3 seconds
+backing call isn't as sort of a mature mature a process or a interaction as the frontend call is so there might be some
+11:11
+11 minutes, 11 seconds
+effort getting put towards that here in a couple of weeks soon yeah I think the
+11:18
+11 minutes, 18 seconds
+other update I guess is that we may be increasing our hiring generally across
+11:25
+11 minutes, 25 seconds
+gitlab in q4 that was a little flag which it may not impact the package team beyond what we already are but there
+11:34
+11 minutes, 34 seconds
+might be extra peeps at a higher rate of peeps coming on board so if it wasn't
+11:41
+11 minutes, 41 seconds
+already a lot of peeps already so cool anything else anyone wants to discuss
+11:48
+11 minutes, 48 seconds
+today and awkward silence yes all right
+11:56
+11 minutes, 56 seconds
+I think that's good to wrap up and I think just wanted to say thank you so much for everyone joining us and Axel lovely to see you and thank you so much
+12:04
+12 minutes, 4 seconds
+for your hard work and hope everyone has a good rest of however much as rest of their day who is
+12:12
+12 minutes, 12 seconds
+left of their day today thanks everybody thank you

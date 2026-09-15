@@ -168,6 +168,20 @@ unreachable; 500 the job failed. The body is always the ack.
 - `deploy/openshift.yaml` also gained `strategy: Recreate` and `terminationGracePeriodSeconds: 3600`,
   which mom-consumer has and this did not: without them a redeploy runs two consumers in one group
   and kills a job that is minutes into an LLM call.
+- **429 "Too Many Requests" on every call — fixed 2026-09-15.** Not the OpenRouter account, not
+  the key, not credits (only $0.04 used), and not too many calls: the very first request of a fresh
+  job was refused, 20 times running. Cause: the writer was pinned to ONE host,
+  `LLM_PROVIDER_ORDER=DeepInfra`, and sends `allow_fallbacks=false`, so when DeepInfra was
+  "rate-limited upstream" nothing could succeed. Proved by calling OpenRouter directly — pinned to
+  DeepInfra: 429; same model unpinned: 200. The pin exists for a real reason (unpinned calls land on
+  hosts with different quantisation), so it was widened, not dropped: `DeepInfra,AkashML,Parasail`,
+  the only hosts matching DeepInfra on BOTH fp8 quantisation and the 131,072 context (Cloudflare is
+  fp8 but 24k, too small for a long transcript). Before: 0 of 20 calls succeeded. After, same file
+  (`t1.txt`, 13,408 chars): 20 of 20, SUCCESS in 263 s. **This only affects local testing** — on
+  the cluster the writer talks to watsonx, where there are no providers to pin.
+- **Kafka messages are lost on `docker compose down`** — known, not yet fixed. `docker-compose.yml`
+  mounts `/var/lib/kafka/data`, but apache/kafka writes to `/tmp/kafka-logs`. MinIO and
+  Elasticsearch persist correctly.
 - **Not yet**: deployed, run against the cluster's real Kafka/MinIO/Elastic, or tried on
   watsonx (the cluster's model, `ibm/granite-4-h-small`).
 

@@ -60,9 +60,19 @@ services:
       # Llama emits no reasoning tokens; without this the token budgets collapse.
       LLM_IS_REASONING: "false"
       MODEL_CONTEXT_LIMIT: "131072"
-      # Pin one host: unpinned, identical calls land on providers with different quantisation,
-      # so output quality varies for reasons that have nothing to do with this service.
-      LLM_PROVIDER_ORDER: DeepInfra
+      # WHICH HOSTS MAY SERVE THE MODEL. Unpinned, OpenRouter spreads identical calls across hosts
+      # running different quantisations, so quality varies for reasons unrelated to this service.
+      # But pinning ONE host (the old "DeepInfra") fails every call the moment that host is busy —
+      # on 2026-09-15 DeepInfra answered 429 "rate-limited upstream" to the very first request, 20
+      # times running, while the same model unpinned answered 200. The writer sends
+      # allow_fallbacks=false, so OpenRouter tries exactly these hosts, in order, and no others.
+      # They are the three that match on BOTH counts that matter (checked against OpenRouter's
+      # /models/<model>/endpoints on 2026-09-15):
+      #     fp8 quantisation   — the same weights, so the same answers
+      #     131,072 context    — Cloudflare is fp8 too but stops at 24,000, which a long transcript
+      #                          passes; a fallback that silently fails on big jobs is worse than none
+      # Re-check that endpoint before adding a host: a provider's quantisation can change.
+      LLM_PROVIDER_ORDER: DeepInfra,AkashML,Parasail
       MOM_WINDOW_KEY_POINTS: "true"
     # No dictionary bind mount: llama/Dockerfile installs `wamerican` into the image, so the
     # over-correction guard keeps its full wordlist wherever this runs, not only on this machine.
