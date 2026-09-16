@@ -53,6 +53,12 @@ spec:
               value: "mom-prompt.acks"
             - name: KAFKA_GROUP_ID
               value: "mom-prompt-consumer"
+            # The ack's `message` on failure (SUCCESS on success). The IMIR backend reads FAILED.
+            - name: ACK_FAILURE_MESSAGE
+              value: "FAILED"
+            # A job sent over HTTP also puts its ack on mom-prompt.acks, where the backend listens.
+            - name: HTTP_ACKS_TO_KAFKA
+              value: "true"
             # ── MinIO ──
             - name: MINIO_ENDPOINT
               value: "minio-service.teamsync.svc.cluster.local:9000"

@@ -56,24 +56,28 @@ running after 30 minutes. For routine testing, keep files under about 15,000 cha
 
 ## The acknowledgement
 
+The acknowledgement is **your own message back, with five fields filled in**: `action`, `message`,
+`summaryBucketName`, `summaryObjectKey` and `description`. Every other field you sent — `path`,
+`fileIds`, `parentId`, `summaryFolderId` and anything else — comes back **exactly as sent**. The service's
+inputs (`prompt`, `file_urls`, `template_url`, `mom_meta`) are not repeated.
+
+It arrives on Kafka topic **`mom-prompt.acks`** — for a job sent on `mom-prompt.jobs`, and also for a job
+sent over HTTP (where it is the response body as well). Match it to your request on `conversationId`.
+
 **Success**
 
 ```json
 {
-  "fileIds": ["test-001"],
-  "tenantId": "test",
-  "compareMode": "",
+  "...": "every field you sent, unchanged — e.g. conversationId, fileIds, tenantId, path",
   "action": "save",
   "message": "SUCCESS",
-  "description": "<first 300 characters of the summary>",
   "summaryBucketName": "mom",
-  "summaryObjectKey": "test/summaries/<id>.docx",
-  "path": "mom/test/summaries/<id>.docx",
-  "...": "every other field you sent, unchanged"
+  "summaryObjectKey": "<tenantId>/summaries/<id>.docx",
+  "description": "<the first sentence of the summary>"
 }
 ```
 
-**Failure** — `summaryBucketName` and `summaryObjectKey` are left out, and `description` says why.
+**Failure** — `message` is `FAILED`, `summaryBucketName` and `summaryObjectKey` are left out, and `description` says why.
 
 ## What to check in the Word file
 
@@ -134,7 +138,7 @@ content always comes from the prompt**. Upload `sample_template_unit.docx` to `m
 | a non-JSSD document (letter, company profile) | SUCCESS; template ignored; `template_status: not_jssd` |
 | a path that does not exist | SUCCESS; template ignored; `template_status: unreadable` |
 | a spreadsheet | SUCCESS; template ignored; `template_status: unreadable` |
-| a template **only**, no prompt and no file | FAILURE — a template is not a meeting source |
+| a template **only**, no prompt and no file | FAILED — a template is not a meeting source |
 
 A template problem never fails the job — the minutes are still produced.
 
@@ -142,10 +146,10 @@ A template problem never fails the job — the minutes are still produced.
 
 | send | expected |
 |---|---|
-| no `prompt` and no `file_urls` | FAILURE — *nothing to write minutes from* |
-| `prompt` under 80 characters, no file | FAILURE — *too little to write minutes from* |
-| `file_urls` pointing at a file that does not exist | FAILURE — *MinIO get failed … NoSuchKey* |
-| a spreadsheet or image as the file | FAILURE — the file is refused |
+| no `prompt` and no `file_urls` | FAILED — *nothing to write minutes from* |
+| `prompt` under 80 characters, no file | FAILED — *too little to write minutes from* |
+| `file_urls` pointing at a file that does not exist | FAILED — *MinIO get failed … NoSuchKey* |
+| a spreadsheet or image as the file | FAILED — the file is refused |
 | two JSON objects pasted in one message | no acknowledgement; the service logs *unparseable message* and moves on |
 | the same `conversationId` sent twice | SUCCESS both times; Elasticsearch keeps **one** record, overwritten |
 

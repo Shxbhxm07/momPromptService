@@ -51,6 +51,40 @@ def is_alive() -> bool:
     return _thread is not None and _thread.is_alive()
 
 
+# ── acks for jobs that arrived over HTTP ─────────────────────────────────────────────────────────
+# The consumer loop owns its own producer; this one serves the web handlers, which run on several
+# threads at once. Made on first use and rebuilt after a failure, so a Kafka outage costs the topic
+# copy of an ack, never the HTTP answer.
+_http_producer = None
+_http_producer_lock = threading.Lock()
+
+
+def publish_ack(ack: dict) -> bool:
+    """Put one HTTP job's ack on KAFKA_ACK_TOPIC. Never raises; returns whether Kafka took it."""
+    global _http_producer
+    job_id = ack.get("conversationId", "")
+    try:
+        with _http_producer_lock:
+            if _http_producer is None:
+                _http_producer = KafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP.split(","),
+                                               value_serializer=lambda v: json.dumps(v).encode())
+            producer = _http_producer
+        producer.send(KAFKA_ACK_TOPIC, ack).get(timeout=15)     # wait for the broker to confirm
+        logger.info(f"[JOB {job_id}] HTTP job: ack {ack.get('message')} also published to {KAFKA_ACK_TOPIC!r}")
+        return True
+    except Exception as e:
+        logger.error(f"[JOB {job_id}] HTTP job: could not publish the ack to {KAFKA_ACK_TOPIC!r} "
+                     f"({type(e).__name__}: {e}) — the HTTP response still carries it")
+        with _http_producer_lock:
+            broken, _http_producer = _http_producer, None
+        if broken is not None:
+            try:
+                broken.close(timeout=1)
+            except Exception:
+                pass
+        return False
+
+
 def _run_forever():
     while not stop.is_set():
         try:

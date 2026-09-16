@@ -156,18 +156,33 @@ the minutes follow the manual and are English.
   absent**. That is what makes a MinIO object stored without an extension readable: the key stays
   `mom/mom-docs/transcripts` while `fileName` says `transcripts.txt`, and the reader dispatches on the
   name. An explicit `document_names` list wins, since it can name every file.
-- Returned **exactly as sent** (same value and JSON type): `accessVar`, `userId`, `isUser`, `user`,
-  `path`, `conversationId`, `clientSessionId`, `queryId`, `metaData`, `uploadType`, `grading`, `data`,
-  `themes`, `fileName`. `conversationId` is filled from the job; `path` becomes `bucket/key` on success.
+- Returned **exactly as sent** (same value and JSON type): **every field the job carried**, except the
+  service's own inputs (`prompt`, `file_urls`, `document_names`, `document_ids`, `tenant_id`, `mom_meta`,
+  `template_url`, `template_name` and their other spellings). So `accessVar`, `userId`, `fileName`,
+  `parentId`, `summaryFolderId`, `fileIds`, `tenantId`, `conversationId`, `clientSessionId`, `queryId`,
+  `metaData`, `uploadType`, `grading`, `data`, `themes`, `path`, `user` — and any field the backend adds
+  later — come back untouched. **`path` is no longer overwritten** with `bucket/key` (it was until
+  2026-09-16; the IMIR backend's reference ack keeps `"AsItIs"` beside SUCCESS).
 
 A job needs a prompt or a file, at least `MIN_SOURCE_CHARS` (80) characters of text in total (a bare
 "make the MoM of yesterday's meeting" is refused; the model would invent the meeting), and at most
 `MAX_SOURCE_CHARS`.
 
-**Out**: `fileIds`, `tenantId`, `compareMode`, `action: "save"`, `message: SUCCESS|FAILURE`,
-`description` (first 300 characters of the summary, or the reason it failed), and on success
-`summaryBucketName` + `summaryObjectKey`. HTTP: 200 SUCCESS; 422 nothing to process; 503 MinIO/Elastic
-unreachable; 500 the job failed. The body is always the ack.
+**Out** — the job's own fields (above), plus ONLY these five, which the service writes (decided with the
+IMIR backend 2026-09-16, from its reference ack): `action: "save"`, `message: SUCCESS|FAILED`
+(`ACK_FAILURE_MESSAGE`; the audio service says FAILURE), `description` (the summary's **first sentence**,
+at most 300 characters and cut at a word — it used to be the first 300 characters cut anywhere, e.g.
+"…nearly 4"; on failure, the reason), and on success `summaryBucketName` + `summaryObjectKey`
+(omitted on failure). `fileIds` / `tenantId` / `conversationId` are filled from the snake_case spellings
+only when the job did not send the camelCase ones. HTTP: 200 SUCCESS; 422 nothing to process; 503
+MinIO/Elastic unreachable; 500 the job failed. The body is always the ack.
+
+**Where the ack goes.** A Kafka job → `mom-prompt.acks`. An HTTP job → the response body **and**
+`mom-prompt.acks` (`HTTP_ACKS_TO_KAFKA`, default on): the IMIR backend listens on the topic but was
+submitting jobs over HTTP, so the minutes never reached it, and a caller whose connection times out on a
+3-minute job still gets its result on the topic. Published before the HTTP reply; a Kafka outage costs
+only the topic copy, never the reply. Verified 2026-09-16 on a real broker: the topic copy is identical
+to the HTTP body, 22 of 22 fields of the backend's reference ack.
 
 ## Status (2026-09-14)
 

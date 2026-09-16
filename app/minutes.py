@@ -12,6 +12,7 @@ The clients it needs are built once, on first use, in setup.py.
 """
 import hashlib
 import logging
+import re
 import time
 from typing import Dict, List, Tuple
 
@@ -45,6 +46,31 @@ def compose_source(prompt: str, documents: List[Tuple[str, str]]) -> str:
     for i, (name, text) in enumerate(documents, start=1):
         parts.append(f"SOURCE DOCUMENT {i} ({name}):\n{text}")
     return "\n\n".join(parts)
+
+
+# Titles and short forms whose full stop does not end a sentence: "chaired by Lt Col. Menon".
+_ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "lt", "col", "gen", "maj", "capt", "brig", "cdr", "cmdr", "sgt",
+                  "no", "st", "sr", "jr", "vs", "etc", "e.g", "i.e", "hq", "rs", "approx", "dept", "govt"}
+_SENTENCE_END = re.compile(r"[.!?](?=\s+[A-Z(\"'])")
+DESCRIPTION_CHARS = 300
+
+
+def one_sentence(text: str, limit: int = DESCRIPTION_CHARS) -> str:
+    """The summary's opening sentence, for the ack's `description`.
+
+    The IMIR backend's reference ack describes the result in one sentence. The first 300 characters
+    used to be sent instead, cut wherever they fell — a real ack ended "…nearly 4". A sentence longer
+    than `limit` is cut at a word, with an ellipsis, never mid-word.
+    """
+    text = " ".join((text or "").split())
+    for m in _SENTENCE_END.finditer(text):
+        last_word = text[:m.start()].rsplit(" ", 1)[-1].lower().rstrip(".")
+        if last_word not in _ABBREVIATIONS and not (len(last_word) == 1 and last_word.isalpha()):
+            text = text[:m.end()]
+            break
+    if len(text) > limit:
+        text = text[:limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return text
 
 
 def _metadata(mom_meta: Dict) -> Dict[str, str]:
@@ -128,7 +154,7 @@ def process(job: KafkaJob, c: Clients) -> dict:
                         + (f" — {template.reason}" if template.reason else ""))
         logger.info(f"[JOB {job.conversation_id}] done in {time.time()-t0:.0f}s — {bucket}/{key}")
         return build_ack(job, success=True, bucket=bucket, object_key=key,
-                         description=(mom.get("summary") or "")[:300])
+                         description=one_sentence(mom.get("summary") or ""))
     except Exception as e:
         logger.error(f"[JOB {job.conversation_id}] failed after {time.time()-t0:.0f}s: {e}")
         return build_ack(job, success=False, description=f"{type(e).__name__}: {e}")

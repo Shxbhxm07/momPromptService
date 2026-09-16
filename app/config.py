@@ -66,3 +66,13 @@ KAFKA_JOB_TOPIC = os.getenv("KAFKA_JOB_TOPIC", "mom-prompt.jobs")
 KAFKA_ACK_TOPIC = os.getenv("KAFKA_ACK_TOPIC", "mom-prompt.acks")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "mom-prompt-consumer")
 KAFKA_MAX_POLL_INTERVAL_MS = int(os.getenv("KAFKA_MAX_POLL_INTERVAL_MS", str(20 * 60 * 1000)))
+
+# ── The acknowledgement ────────────────────────────────────────────────────────
+# `message` on a failed job. The IMIR backend's ack reads SUCCESS or FAILED (2026-09-16); the audio
+# service sends FAILURE. A setting, so a backend that expects the other word needs no rebuild.
+ACK_FAILURE_MESSAGE = os.getenv("ACK_FAILURE_MESSAGE", "FAILED").strip() or "FAILED"
+# A job that arrives over HTTP ALSO publishes its ack to KAFKA_ACK_TOPIC. The IMIR backend listens on
+# mom-prompt.acks for the result, and on 2026-09-16 it was submitting jobs over HTTP — so without this
+# the finished minutes never reached it. A job that arrived on Kafka acks there anyway, so no job is
+# ever acknowledged twice on the topic.
+HTTP_ACKS_TO_KAFKA = os.getenv("HTTP_ACKS_TO_KAFKA", "true").lower() == "true"

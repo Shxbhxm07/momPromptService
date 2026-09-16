@@ -3,7 +3,8 @@ document (PDF, DOCX, DOC or TXT). No audio.
 
 Two ways in, one job (minutes.py):
   * Kafka: a message on KAFKA_JOB_TOPIC, the acknowledgement on KAFKA_ACK_TOPIC (kafka_consumer.py, started here).
-  * HTTP:  POST /v1/mom-prompt with the same JSON; the response body is the same acknowledgement.
+  * HTTP:  POST /v1/mom-prompt with the same JSON; the response body is the same acknowledgement, and
+           that ack is ALSO published to KAFKA_ACK_TOPIC (HTTP_ACKS_TO_KAFKA), where the backend listens.
 
 The message and the acknowledgement are the audio service's (~/offline-mom-api/docs/kafka-contract.md) plus one field,
 `prompt`. The body is taken as a plain JSON object, not a typed model, so the backend's fields go back
@@ -19,7 +20,7 @@ import kafka_consumer
 import logger_config
 import minutes
 import setup
-from config import ENABLE_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC
+from config import ENABLE_KAFKA, HTTP_ACKS_TO_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC
 from kafka_contract import build_ack, parse_job
 from mom import MomGenerator
 
@@ -100,13 +101,24 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
         raise HTTPException(status_code=400, detail="The body must be a JSON object, like a Kafka job.")
     job = parse_job(payload)
     if not job.prompt and not job.file_urls:
-        return JSONResponse(status_code=422, content=build_ack(
+        return _answer(422, build_ack(
             job, success=False, description="No prompt and no file_urls: nothing to write minutes from."))
     try:
         c = setup.clients()
     except Exception as e:
         logger.error(f"[JOB {job.conversation_id}] MinIO / Elasticsearch not ready: {e}")
-        return JSONResponse(status_code=503, content=build_ack(
+        return _answer(503, build_ack(
             job, success=False, description=f"Storage not ready — {type(e).__name__}: {e}"))
     ack = minutes.process(job, c)
-    return JSONResponse(status_code=200 if ack.get("message") == "SUCCESS" else 500, content=ack)
+    return _answer(200 if ack.get("message") == "SUCCESS" else 500, ack)
+
+
+def _answer(status: int, ack: Dict[str, Any]) -> JSONResponse:
+    """The HTTP reply — and the same ack on KAFKA_ACK_TOPIC, where the backend listens for it.
+
+    Published before replying, so a caller that has stopped waiting (a route or client timeout on a
+    long job) still gets its result on the topic.
+    """
+    if ENABLE_KAFKA and HTTP_ACKS_TO_KAFKA:
+        kafka_consumer.publish_ack(ack)
+    return JSONResponse(status_code=status, content=ack)
