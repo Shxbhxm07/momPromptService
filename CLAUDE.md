@@ -46,6 +46,8 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
 | `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
+| `tools/check_jssd_layout.py` | **the layout conformance check** — renders a specimen and asserts 38 rules of the manual on it, page by page. Run after any `docx_export.py` change |
+| `app/prompt_leak.py` | drops the user's own request when the writer minutes it as a decision or an action |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
@@ -306,6 +308,27 @@ unreachable; 500 the job failed. The body is always the ack.
   ("Carroll", "Comptroller") dropped because the transcript's speech-to-text spelling differs; 11 pages for a
   15-minute meeting. Candidate fixes, in order: meeting date only from mom_meta or an explicit statement;
   ground decisions and actions like key points; brevity for JSSD.
+- **Full layout audit against the manual, 2026-09-16 — every page, every element.** Triggered by the
+  margin bug below, which a page-1-only audit had missed. Ground truth re-read from the PDF:
+  **Appendix AD is at PDF pages 52, 53, 54** (printed 328-330), its **explanatory notes 1-6 at PDF 58-59**
+  (printed 334-335), and Ch 6 paras 9-20 at PDF 13-20. `tools/check_jssd_layout.py` now renders a
+  5-page specimen and asserts **38 of the manual's numbered rules** on the converted PDF — margins per
+  page, line feeds between every superscription element, tab stops, page numbering, the ITEM blocks,
+  the signature block and the distribution table. **All 38 pass.** Run it after any `docx_export.py`
+  change; it needs no model, no network and no job.
+  Checked and found ALREADY CORRECT (do not "fix" these): continuation lines return to the left margin
+  under the paragraph number, NOT hanging-indented (Part 1 paras 33.3.7, 49.4, Note 26 — and AD draws
+  it that way at paras 4, 7, 9, 12); the ITEM heading is bold AND underlined (**AD note 4**: "always
+  centre-aligned, and underlined; it may be bold" — the AD drawing shows bold only, and Part 1 para 51
+  says headings are not underlined, so the manual contradicts itself; note 4 is the minutes-specific
+  rule and wins); the distribution table has AD's **four** columns, not para 69's five with `Method`;
+  the tables are borderless though para 39.6.6 asks for gridlines (AD draws none); the page count is
+  one line feed below the classification and everything else two (paras 18.1, 18.3); dates are
+  `dd Mmm yy` with a leading zero (para 40) and the time four figures + HR (para 42.2).
+  Two more notes: **the manual never states a font size** — Part 1 para 13 ends literally at
+  "typeface 'Arial', font-size." — so our 12 pt is a choice, not a rule; and AD's own third specimen
+  page is misnumbered `2`, so its page break before the distribution list is illustrative, **not** a
+  requirement, which is why the distribution still follows the signature block on the same page.
 - **Alternating page margins — fixed 2026-09-16.** The user's file `f7fc5592…docx` had its text starting
   at 1.31 in on odd pages and **0.49 in on even pages**, so alternate pages sat visibly further left.
   Cause: `_page_setup` wrote `w:mirrorMargins` into settings.xml, reasoning that minutes are printed on
@@ -313,6 +336,17 @@ unreachable; 500 the job failed. The body is always the ack.
   user's 12-page file: 1.31 / 0.49 / 1.29 / 0.50 … all the way down. `w:mirrorMargins` is now removed
   (and stripped if ever present); the gutter stays on the left throughout. Re-measured on a fresh 8-page
   render: 1.31 in on every page. **Do not add mirror margins back.**
+- **Two content fixes, 2026-09-16.** (1) A due date that already carries its own preposition is no
+  longer given a second one — a real run printed "... update them as necessary **by After** the
+  reevaluation". `_CARRIES_PREP` keeps "by/after/within/w.e.f. ..." as written, `_STANDS_ALONE` keeps
+  "immediately"/"asap"/"ongoing" bare, and everything else still gets "by". (2) `app/prompt_leak.py`
+  drops the user's own request when the writer minutes it — a real run printed
+  "7. **Decision.** Prepare the minutes of the meeting.", which nobody at that meeting decided.
+  Deliberately narrow, because losing a real decision is far worse: all four must hold — the line opens
+  with an instruction verb ("prepare", "record", "list"...), every content word of it also occurs in the
+  prompt, it is at most 15 words, and (for an action) nobody owns it and nothing is due. 13 tests cover
+  both sides, including "A motion to approve the minutes was made and seconded." which must survive.
+  What is dropped is logged per job.
 - **Spacing audited against the manual 2026-09-16 and found ALREADY CORRECT — do not "fix" it.**
   Appendix AD's "Two Lines" means two line FEEDS, ie ONE blank line: Part 1 para 7 ("a line-space implies
   a line-feed; it does not imply a blank line") and 7.1 ("a two-line spacing implies two line feeds, or

@@ -540,6 +540,14 @@ def _introduction(w: _Minutes, mom):
             _sub(w.doc.add_paragraph(), f"{n}.{j}.", s)
 
 
+# How a due date joins its task. Three cases, because one rule reads badly on two of them — a real run
+# produced "... update them as necessary by After the reevaluation" ("after" was not on the list).
+_CARRIES_PREP = re.compile(r"(by|before|after|within|during|on|in|at|from|till|until|no later than|"
+                           r"not later than|w\.?e\.?f\.?)\b", re.I)          # "by 30 Sep" — take as it is
+_STANDS_ALONE = re.compile(r"(immediate(ly)?|asap|at once|forthwith|ongoing|continuous(ly)?|"
+                           r"in progress|tbc)\b", re.I)                      # "immediately", never "by immediately"
+
+
 def flatten_items(mom) -> Tuple[List[str], List[str], List[Tuple[str, str]]]:
     """The three lists an item prints, in print order: points, figures, decisions-with-owner.
 
@@ -555,7 +563,8 @@ def flatten_items(mom) -> Tuple[List[str], List[str], List[Tuple[str, str]]]:
         task, due = _clean(ai.get("task")).rstrip("."), _clean(ai.get("due"))
         due = _date(due) or due
         if due and due.lower() not in task.lower():
-            task += f" {due}" if re.match(r"(by|before|within|on|in|till|until|end of)\b", due, re.I) else f" by {due}"
+            joined = _CARRIES_PREP.match(due) or _STANDS_ALONE.match(due)
+            task += f" {due}" if joined else f" by {due}"
         decisions.append((task, _clean(ai.get("assigned_to"))))
     return points, figures, decisions
 

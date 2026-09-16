@@ -32,6 +32,8 @@ All names, addresses and file numbers in these files are **specimen values**, no
 4. **Open the Word file** — MinIO console → **mom** → **test** → **summaries** → the newest `.docx`.
    Its exact name is in the acknowledgement's `summaryObjectKey`.
 
+**Layout.** Every page of the minutes has the same margins: the text starts 1.30 in from the left edge on page 1 and on page 12 alike (0.5 in margin + the 0.8 in binding gutter, Part 1 paras 10.1-10.3). Before 16 Sep 26 alternate pages sat 0.8 in further left; if you still see that, you are testing an image built before that date.
+
 **Timing.** A short document takes about 4 minutes; a 13,000-character transcript took 4½ minutes.
 Long transcripts are split into pieces and take much longer — a 57,000-character one was still
 running after 30 minutes. For routine testing, keep files under about 15,000 characters.
@@ -153,16 +155,15 @@ These are known and tracked. Log them only if the behaviour is **different** fro
 
 | # | what you will see | why |
 |---|---|---|
-| 1 | **Only `ITEM I`**, even when the agenda lists several items | the model does not yet say which point belongs to which agenda item |
-| 2 | **`Info` column always empty** | not produced yet |
-| 3 | `Action` column **empty for most decisions** | only action items carry an owner; plain decisions do not |
-| 4 | Decisions in the **past tense** (*"the motion passed"*) instead of *"It was decided that…"* | prompt wording, not yet changed |
-| 5 | **No Secretary** in the attendee list | only listed if the source names one |
-| 6 | Title has no venue, time or date | these come from `mom_meta`; send it to see them |
-| 7 | A long name in the `Action` column **breaks mid-word** | the column is 1 inch wide, as in the manual, which uses short forms such as `SO (Ops)` |
-| 8 | Opened in LibreOffice, the font looks like a **serif** font | the file uses Arial; LibreOffice substitutes when Arial is not installed. Check in Microsoft Word |
-| 9 | A template's **own layout, letterhead image or Hindi headings** are not copied | by design: the template supplies standing details only; the layout follows the manual and the minutes are English |
-| 10 | In the distribution table, a template's Remarks value `NA` prints as an **empty** cell | `NA` is treated as "no value" so it can never appear as a false entry elsewhere |
+| 1 | `Info` column always empty | not produced yet; `Action` is filled from the owner of an action item |
+| 2 | `Action` column **empty for most decisions** | only action items carry an owner; plain decisions do not |
+| 3 | Decisions in the **past tense** (*"the motion passed"*) instead of *"It was decided that…"* | prompt wording, not yet changed |
+| 4 | **No Secretary** in the attendee list | only listed if the source names one |
+| 5 | Title has no venue, time or date | these come from `mom_meta`; send it to see them |
+| 6 | A long name in the `Action` column **breaks mid-word** | the column is 1 inch wide, as in the manual, which uses short forms such as `SO (Ops)` |
+| 7 | Opened in LibreOffice, the font looks like a **serif** font | the file uses Arial; LibreOffice substitutes when Arial is not installed. Check in Microsoft Word |
+| 8 | A template's **own layout, letterhead image or Hindi headings** are not copied | by design: the template supplies standing details only; the layout follows the manual and the minutes are English |
+| 9 | In the distribution table, a template's Remarks value `NA` prints as an **empty** cell | `NA` is treated as "no value" so it can never appear as a false entry elsewhere |
 
 ### Files without an extension
 

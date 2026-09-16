@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple
 
 import agenda_items
 import document_checker
+import prompt_leak
 import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
 from docx_export import build_mom_docx, flatten_items
@@ -95,6 +96,13 @@ def process(job: KafkaJob, c: Clients) -> dict:
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
+
+        # compose_source labels the prompt "USER'S REQUEST FOR THESE MINUTES" and the writer still
+        # minutes it now and then — a real run printed "Decision. Prepare the minutes of the meeting."
+        # This drops only a line that reads as the request itself; see prompt_leak for the four tests.
+        for line in prompt_leak.strip(mom, job.prompt):
+            logger.info(f"[JOB {job.conversation_id}] dropped the request back out of the "
+                        f"minutes — {line}")
 
         # Appendix AD records one ITEM per agenda entry (Ch 6 para 16.7), each ending in its own
         # Decision. The writer returns flat lists, so the grouping is worked out here and passed to the
