@@ -46,6 +46,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
 | `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
+| `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
@@ -194,9 +195,9 @@ unreachable; 500 the job failed. The body is always the ack.
   `Decision.` prefix, amendments-by line, left-aligned signature block, distribution ending in File,
   Arial 12, a real PAGE field, and a 1.30 in left margin (0.5 in + a 0.8 in mirrored gutter) — all
   match the specimen. What does NOT match, and why:
-    - **One `ITEM I` only.** AD wants one item per agenda entry (Ch 6 para 16.7), each ending in its
-      own decision (16.14). /summarize returns flat lists with no link to the agenda, so `_items()`
-      can only make one. Needs a llama-service change; see Next steps 5.
+    - ~~**One `ITEM I` only.**~~ **Fixed 2026-09-16** — `app/agenda_items.py` groups the verified lines
+      under the agenda and `_items()` builds one item per entry, so the minutes read ITEM I, II, III…
+      with continuous paragraph numbering, as AD draws them (Ch 6 paras 16.7, 16.14).
     - **Action/Info columns mostly empty** (16.8, 16.16, mandatory). The renderer already maps
       `action_items[].assigned_to` into Action — the model simply leaves it blank, and `decisions`
       has no owner field at all. Same root cause.
@@ -305,6 +306,22 @@ unreachable; 500 the job failed. The body is always the ack.
   ("Carroll", "Comptroller") dropped because the transcript's speech-to-text spelling differs; 11 pages for a
   15-minute meeting. Candidate fixes, in order: meeting date only from mom_meta or an explicit statement;
   ground decisions and actions like key points; brevity for JSSD.
+- **Spacing audited against the manual 2026-09-16 and found ALREADY CORRECT — do not "fix" it.**
+  Appendix AD's "Two Lines" means two line FEEDS, ie ONE blank line: Part 1 para 7 ("a line-space implies
+  a line-feed; it does not imply a blank line") and 7.1 ("a two-line spacing implies two line feeds, or
+  one blank line"). Measured on the rendered PDF, one line = 16.3 pt: classification→telephone 1.96
+  lines, telephone→address 1.97, between address lines 1.00, address→title 1.98, every body block one
+  blank line, signature 8 blanks + its own line = 9 feeds ("as required, usually nine"). Also confirmed
+  from Part 1: 0.5 in margins with a 0.8 in gutter (10.1, 10.2), 1.15 inside a paragraph (8.3), single
+  spacing inside the address block (8.2), page count in words below ten (18.2), never capitals or
+  underlined (18.4).
+- **ITEM I/II/III built 2026-09-16.** The renderer could already draw several items; only the grouping
+  was missing. `agenda_items.group()` shows the model the agenda and the numbered lists and takes back
+  INDEX NUMBERS only, so nothing can be invented. Guards: fewer than two agenda entries or no points →
+  no call; out-of-range, repeated or non-integer indices dropped; under `MIN_PLACED` (50%) of points
+  placed → the single item is kept; leftovers go to the last item. Verified by 17 tests and a live run
+  on the stored `momp-002` minutes: 6 items from a 7-entry agenda, 89% placed, numbering 5→12 unbroken,
+  owners in the Action column.
 
 ## Next steps
 
