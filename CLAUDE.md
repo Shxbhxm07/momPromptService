@@ -306,6 +306,13 @@ unreachable; 500 the job failed. The body is always the ack.
   ("Carroll", "Comptroller") dropped because the transcript's speech-to-text spelling differs; 11 pages for a
   15-minute meeting. Candidate fixes, in order: meeting date only from mom_meta or an explicit statement;
   ground decisions and actions like key points; brevity for JSSD.
+- **Alternating page margins — fixed 2026-09-16.** The user's file `f7fc5592…docx` had its text starting
+  at 1.31 in on odd pages and **0.49 in on even pages**, so alternate pages sat visibly further left.
+  Cause: `_page_setup` wrote `w:mirrorMargins` into settings.xml, reasoning that minutes are printed on
+  both sides, and Word then swaps the 0.8 in binding margin to the RIGHT on even pages. Measured on the
+  user's 12-page file: 1.31 / 0.49 / 1.29 / 0.50 … all the way down. `w:mirrorMargins` is now removed
+  (and stripped if ever present); the gutter stays on the left throughout. Re-measured on a fresh 8-page
+  render: 1.31 in on every page. **Do not add mirror margins back.**
 - **Spacing audited against the manual 2026-09-16 and found ALREADY CORRECT — do not "fix" it.**
   Appendix AD's "Two Lines" means two line FEEDS, ie ONE blank line: Part 1 para 7 ("a line-space implies
   a line-feed; it does not imply a blank line") and 7.1 ("a two-line spacing implies two line feeds, or

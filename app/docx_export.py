@@ -343,14 +343,14 @@ def _page_setup(doc, draft: bool):
     sec.top_margin = sec.bottom_margin = sec.left_margin = sec.right_margin = EDGE
     sec.gutter = GUTTER
     sec.header_distance = sec.footer_distance = EDGE      # Part 1 App E notes 1 and 14
-    # Printed on both sides (Part 1 para 6), so the gutter swaps sides on the reverse page (App E note 15).
+    # EVERY page is laid out the same: the 0.8 in binding margin stays on the LEFT throughout, so the
+    # left margin is 1.30 in on page 1 and on page 10 alike. Do NOT add w:mirrorMargins here — it was
+    # added once, for two-sided printing, and Word then swapped the binding margin to the right on even
+    # pages, so alternate pages of the minutes sat visibly further left. The manual's specimen shows one
+    # layout for the whole document.
     settings = doc.settings.element
-    zoom = settings.find(qn("w:zoom"))
-    mirror = OxmlElement("w:mirrorMargins")
-    if zoom is not None:
-        zoom.addnext(mirror)
-    else:
-        settings.insert(0, mirror)
+    for mirror in settings.findall(qn("w:mirrorMargins")):
+        settings.remove(mirror)
 
     defaults = doc.styles.element.find(qn("w:docDefaults"))
     rpr = defaults.find(qn("w:rPrDefault")).find(qn("w:rPr")) if defaults is not None else None
