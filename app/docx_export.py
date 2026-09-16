@@ -540,9 +540,12 @@ def _introduction(w: _Minutes, mom):
             _sub(w.doc.add_paragraph(), f"{n}.{j}.", s)
 
 
-def _items(mom, grade: str) -> List[Dict[str, Any]]:
-    """The discussion as AD items: the points discussed, then each decision, then each task as a
-    decision with its owner in the Action column (Ch 6 paras 16.8, 16.14, 16.16)."""
+def flatten_items(mom) -> Tuple[List[str], List[str], List[Tuple[str, str]]]:
+    """The three lists an item prints, in print order: points, figures, decisions-with-owner.
+
+    Split out so that whatever groups them under agenda items works on the EXACT strings that will be
+    printed — the owner and due date are folded in here, once (Ch 6 paras 16.8, 16.14, 16.16).
+    """
     points = [p for p in (_clean(x) for x in mom.get("key_points") or []) if p]
     figures = [f for f in (_clean(x) for x in mom.get("key_figures") or []) if f]
     decisions = [(d, "") for d in (_clean(x) for x in mom.get("decisions") or []) if d]
@@ -554,8 +557,39 @@ def _items(mom, grade: str) -> List[Dict[str, Any]]:
         if due and due.lower() not in task.lower():
             task += f" {due}" if re.match(r"(by|before|within|on|in|till|until|end of)\b", due, re.I) else f" by {due}"
         decisions.append((task, _clean(ai.get("assigned_to"))))
+    return points, figures, decisions
+
+
+def _items(mom, grade: str) -> List[Dict[str, Any]]:
+    """The discussion as AD items: the points discussed, then each decision, then each task as a
+    decision with its owner in the Action column (Ch 6 paras 16.8, 16.14, 16.16).
+
+    ONE ITEM PER AGENDA ENTRY when `mom["item_groups"]` says which line belongs where — the shape
+    Appendix AD draws (ITEM I, ITEM II, ITEM III, each ending in its own Decision). The groups hold
+    INDEXES into the lists above, never text, so nothing here can differ from what the writer verified.
+    Without them, everything goes under a single item named after the meeting, as before.
+    """
+    points, figures, decisions = flatten_items(mom)
     if not (points or figures or decisions):
         return []
+
+    groups = mom.get("item_groups")
+    if isinstance(groups, list) and groups:
+        items = []
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            pick = lambda src, key: [src[i] for i in (g.get(key) or []) if isinstance(i, int) and 0 <= i < len(src)]
+            item = {"title": _clean(g.get("title")) or _clean(mom.get("title")) or "Discussion",
+                    "grade": grade or "UNCLASSIFIED",
+                    "points": pick(points, "points"),
+                    "figures": pick(figures, "figures"),
+                    "decisions": pick(decisions, "decisions")}
+            if item["points"] or item["figures"] or item["decisions"]:
+                items.append(item)
+        if items:
+            return items
+
     return [{"title": _clean(mom.get("title")) or "Discussion", "grade": grade or "UNCLASSIFIED",
              "points": points, "figures": figures, "decisions": decisions}]
 

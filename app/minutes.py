@@ -15,10 +15,11 @@ import logging
 import time
 from typing import Dict, List, Tuple
 
+import agenda_items
 import document_checker
 import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
-from docx_export import build_mom_docx
+from docx_export import build_mom_docx, flatten_items
 from documents import extract_text_blocks
 from kafka_contract import KafkaJob, build_ack, summary_object_key
 from minio_client import ObjectStore
@@ -94,6 +95,15 @@ def process(job: KafkaJob, c: Clients) -> dict:
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
+
+        # Appendix AD records one ITEM per agenda entry (Ch 6 para 16.7), each ending in its own
+        # Decision. The writer returns flat lists, so the grouping is worked out here and passed to the
+        # renderer as INDEXES into the very lists it prints — no text crosses back, and a failed or
+        # unconvincing grouping simply leaves the single item the service produced before.
+        points, figures, decisions = flatten_items(mom)
+        groups = agenda_items.group(mom, points, decisions, figures)
+        if groups:
+            mom["item_groups"] = groups
 
         docx_bytes = build_mom_docx(mom, meta)
         bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest()),
