@@ -67,7 +67,10 @@ class KafkaJob:
 # null stays null). Anything not present stays absent. `path` and `conversationId` are the two the
 # ack fills in (build_ack); the rest are the backend's to interpret.
 ECHO_FIELDS = ("accessVar", "userId", "isUser", "user", "path", "conversationId",
-               "clientSessionId", "queryId", "metaData", "uploadType", "grading", "data", "themes")
+               "clientSessionId", "queryId", "metaData", "uploadType", "grading", "data", "themes",
+               # The uploaded document's name. Echoed like the rest, and ALSO read below as the name
+               # of the file in file_urls when document_names is absent — see parse_job.
+               "fileName")
 
 
 def _dict(value: Any) -> Dict[str, Any]:
@@ -107,6 +110,21 @@ def _paths(msg: Dict[str, Any]) -> List[str]:
     return [single.strip()] if _looks_like_a_file(single) else []
 
 
+def _names(msg: Dict[str, Any]) -> List[str]:
+    """The names of the files in `file_urls`, from `document_names` or, failing that, `fileName`.
+
+    `fileName` is the backend's name for the uploaded document — the same field name its chunk index
+    uses. Taking it here is what makes a MinIO object stored WITHOUT an extension readable: the key
+    stays "mom/mom-docs/transcripts" while fileName says "transcripts.txt", and the reader dispatches
+    on the name, not on the key. An explicit document_names list wins, since it can name every file.
+    """
+    names = list(_get(msg, "document_names", "documentNames", default=[]) or [])
+    if names:
+        return names
+    one = str(_get(msg, "fileName", "file_name", default="") or "").strip()
+    return [one] if one else []
+
+
 def parse_job(msg: Dict[str, Any]) -> KafkaJob:
     return KafkaJob(
         tenant_id=_get(msg, "tenant_id", "tenantId", default="") or "",
@@ -117,7 +135,7 @@ def parse_job(msg: Dict[str, Any]) -> KafkaJob:
         document_ids=list(_get(msg, "document_ids", "documentIds", default=[]) or []),
         file_urls=_paths(msg),
         file_fids=list(_get(msg, "file_fids", "fileFids", "fIds", default=[]) or []),
-        document_names=list(_get(msg, "document_names", "documentNames", default=[]) or []),
+        document_names=_names(msg),
         prompt=str(_get(msg, "prompt", default="") or "").strip(),
         mom_meta=_dict(_get(msg, "mom_meta", "momMeta", default={})),
         template_url=str(_get(msg, "template_url", "templateUrl", default="") or "").strip(),

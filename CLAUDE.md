@@ -148,9 +148,14 @@ the minutes follow the manual and are English.
   JSSD minutes template** in MinIO (DOCX, DOC, PDF or TXT). **Not a source document** — nothing in it is
   summarised. It supplies only the HQ's standing details: `telephone`, `address`, `file_ref`, `secretary`,
   `distribution`. The job's own `mom_meta` wins over it field by field. See *Templates* below.
+- `fileName` / `file_name` (optional): the uploaded document's name — the same field name the backend's
+  chunk index uses. Echoed back like the rest, and **used as the document's name when `document_names` is
+  absent**. That is what makes a MinIO object stored without an extension readable: the key stays
+  `mom/mom-docs/transcripts` while `fileName` says `transcripts.txt`, and the reader dispatches on the
+  name. An explicit `document_names` list wins, since it can name every file.
 - Returned **exactly as sent** (same value and JSON type): `accessVar`, `userId`, `isUser`, `user`,
   `path`, `conversationId`, `clientSessionId`, `queryId`, `metaData`, `uploadType`, `grading`, `data`,
-  `themes`. `conversationId` is filled from the job; `path` becomes `bucket/key` on success.
+  `themes`, `fileName`. `conversationId` is filled from the job; `path` becomes `bucket/key` on success.
 
 A job needs a prompt or a file, at least `MIN_SOURCE_CHARS` (80) characters of text in total (a bare
 "make the MoM of yesterday's meeting" is refused; the model would invent the meeting), and at most

@@ -43,6 +43,7 @@ running after 30 minutes. For routine testing, keep files under about 15,000 cha
 | `prompt` | if no file | what the meeting was, or what the minutes should focus on |
 | `file_urls` | if no prompt | MinIO path `bucket/folder/file`, e.g. `mom/mom-docs/notes.pdf` |
 | `document_names` | recommended | the file name **with its extension** — see *Files without an extension* |
+| `fileName` | no | the uploaded document's name. Returned in the acknowledgement, and used as the document's name when `document_names` is absent |
 | `conversationId` | yes | use a new one per test; it names the Elasticsearch record |
 | `document_ids` | yes | comes back as `fileIds` |
 | `tenant_id` | yes | the Word file is stored under `<tenant_id>/summaries/` |
@@ -166,11 +167,16 @@ These are known and tracked. Log them only if the behaviour is **different** fro
 ### Files without an extension
 
 A file stored with no extension (e.g. `transcripts`) is **refused**, even if it is plain text.
-Put the extension in `document_names` and it is read normally — `file_urls` keeps the real name:
+Give the name with its extension and it is read normally — `file_urls` keeps the real key. Either field
+works, `document_names` first:
 
 ```json
 "file_urls": ["mom/mom-docs/transcripts"],
 "document_names": ["transcripts.txt"]
+```
+```json
+"file_urls": ["mom/mom-docs/transcripts"],
+"fileName": "transcripts.txt"
 ```
 
 ## Reporting a bug
