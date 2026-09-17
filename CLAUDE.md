@@ -18,7 +18,7 @@ POST /v1/mom-prompt ───┘                                   └─▶ HTT
 
 job.process:  file_urls ─▶ MinIO ─▶ text (PDF text layer; OCR for scanned pages) ─┐
                                                           prompt ─────────────────┴─▶ minutes writer, IN PROCESS (app/llama)
-              minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/{md5}.docx
+              minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/{md5}/MoM-<file name>.docx
                       ─▶ Elasticsearch: record in ELASTIC_INDEX_ATTACHED (id = conversationId)
                                         + chunks in CHUNK_INDEX (their doc-ingest index, never created here)
 ```
@@ -217,6 +217,17 @@ at most 300 characters and cut at a word — it used to be the first 300 charact
 (omitted on failure). `fileIds` / `tenantId` / `conversationId` are filled from the snake_case spellings
 only when the job did not send the camelCase ones. HTTP: 200 SUCCESS; 422 nothing to process; 503
 MinIO/Elastic unreachable; 500 the job failed. The body is always the ack.
+
+**The file's name (2026-09-17).** `summaryObjectKey` is `{tenant}/summaries/{md5}/MoM-<file name>.docx`, so the
+download is `MoM-transcripts.docx`, not `78606119fe8f….docx`. The name is the first document's
+`document_names` / `fileName`, else its key's last part, without a .pdf/.docx/.doc/.txt extension; a
+hash or UUID is not a name, so then — and for a prompt with no document — the meeting title stands in,
+and with neither it is plain `MoM`. Characters that break keys, URLs or a Content-Disposition header
+(see `_UNSAFE` in `kafka_contract.py`) become `_`; spaces and Hindi stay; at most 100
+characters. **The hash stays, as a folder**: the name alone would let two meetings uploaded as `notes.pdf`
+in one tenant overwrite each other, and an edit overwrite the version before it. An edit keeps the name
+of the version it changes (`minutes_edit._file_name`). Checked on a real MinIO: names with spaces, Hindi
+and replaced characters store, read back and download through a presigned URL.
 
 **Where the ack goes.** A Kafka job → `mom-prompt.acks`. An HTTP job → the response body **and**
 `mom-prompt.acks` (`HTTP_ACKS_TO_KAFKA`, default on): the IMIR backend listens on the topic but was

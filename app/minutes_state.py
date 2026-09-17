@@ -7,9 +7,9 @@ grouping that cost a model call to work out. Without them an edit could not prod
 only a similar one. The ES record is also their index, with a mapping we do not own; a JSON object beside
 the .docx in MinIO adds no field to it and no schema to agree.
 
-WHERE. `{scope}/minutes-state/{conversationId}.json`, next to `{scope}/summaries/{md5}.docx` and scoped
-the same way (tenant, else conversation, else user). One per conversation: an edit overwrites it, and the
-.docx of every version stays in MinIO under its own hash, which is what makes undo possible.
+WHERE. `{scope}/minutes-state/{conversationId}.json`, next to `{scope}/summaries/{md5}/MoM-<file name>.docx`
+and scoped the same way (tenant, else conversation, else user). One per conversation: an edit overwrites
+it, and the .docx of every version stays in MinIO under its own hash, which is what makes undo possible.
 
 NEVER FATAL. A job that cannot write its state is still a finished job — the minutes are already stored.
 Only the next edit suffers, and it says so plainly instead of guessing.

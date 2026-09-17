@@ -33,7 +33,7 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 # Empty: the first part of each file_urls entry is the bucket ("mom/mom-docs/notes.pdf").
 MINIO_INPUT_BUCKET = os.getenv("MINIO_INPUT_BUCKET", "").strip()
-# Where the Word minutes go, as {tenant}/summaries/{hash}.docx; returned as summaryBucketName.
+# Where the Word minutes go, as {tenant}/summaries/{hash}/MoM-<file name>.docx; returned as summaryBucketName.
 MINIO_SUMMARY_BUCKET = os.getenv("MINIO_SUMMARY_BUCKET", "summaries")
 
 # ── Elasticsearch ──────────────────────────────────────────────────────────────

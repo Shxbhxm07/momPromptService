@@ -22,8 +22,9 @@ FOUR GUARDS, none optional:
   4. NOTHING ELSE MOVES — untouched lines are copied exactly, and the ITEM grouping is remapped from
      the old minutes to the new rather than worked out again, so items do not reshuffle.
 
-EVERY VERSION IS KEPT: each edit writes a new .docx under its own hash and pushes the previous state
-onto a history, so "undo the last change" is a change like any other.
+EVERY VERSION IS KEPT: each edit writes a new .docx under its own hash folder, named "MoM-<file name>"
+like the first version, and pushes the previous state onto a history, so "undo the last change" is a
+change like any other.
 """
 import copy
 import difflib
@@ -36,7 +37,7 @@ from typing import Any, Dict, List, Tuple
 
 import minutes_state
 from docx_export import build_mom_docx, flatten_items
-from kafka_contract import KafkaJob, build_ack, summary_object_key
+from kafka_contract import KafkaJob, build_ack, summary_file_name, summary_object_key
 from setup import Clients
 
 logger = logging.getLogger("edit")
@@ -332,6 +333,21 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
     return done, refused, undo
 
 
+# The name the first version was stored under: "{hash}/MoM-notes.docx" → "MoM-notes".
+_STORED_NAME = re.compile(r"(MoM(?:-.+)?)\.docx")
+
+
+def _file_name(state: Dict[str, Any], job: KafkaJob, mom: Dict[str, Any]) -> str:
+    """An edited version keeps the name the minutes already have.
+
+    An edit carries no document, so the name cannot be worked out from the job again — it is read back
+    from where the last version was stored. Minutes stored before the rename (as "{hash}.docx") have
+    none, so they get a name the usual way, from a `fileName` the edit may carry or the title.
+    """
+    stored = _STORED_NAME.fullmatch(str(state.get("summary_object_key") or "").rsplit("/", 1)[-1])
+    return stored.group(1) if stored else summary_file_name(job, mom.get("title") or "")
+
+
 def process(job: KafkaJob, c: Clients) -> dict:
     """An edit job → an acknowledgement, exactly like a normal job. Never raises."""
     t0 = time.time()
@@ -371,7 +387,8 @@ def process(job: KafkaJob, c: Clients) -> dict:
                 mom["item_groups"] = _regroup(groups, before, mom)
 
         docx_bytes = build_mom_docx(mom, meta)
-        bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest()),
+        bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest(),
+                                                        name=_file_name(state, job, mom)),
                                      docx_bytes, DOCX_MIME)
         history.append(minutes_state.snapshot(state))
         minutes_state.save(job, c.store, mom=mom, meta=meta, template=state.get("template") or {},

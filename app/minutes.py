@@ -5,7 +5,7 @@ the recording replaced by text:
 
     file_urls ─▶ MinIO ─▶ text (text layer; OCR for scanned pages) ─┐
                                               prompt ───────────────┴─▶ llama-service /summarize
-    minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/ ─▶ Elasticsearch (record + chunks) ─▶ ack
+    minutes ─▶ JSSD .docx ─▶ MinIO {tenant}/summaries/{hash}/MoM-<file name>.docx ─▶ Elasticsearch (record + chunks) ─▶ ack
 
 Both ways in use it: the Kafka consumer (kafka_consumer.py) and POST /v1/mom-prompt (main.py).
 The clients it needs are built once, on first use, in setup.py.
@@ -24,7 +24,7 @@ import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
 from docx_export import build_mom_docx, flatten_items
 from documents import extract_text_blocks
-from kafka_contract import KafkaJob, build_ack, summary_object_key
+from kafka_contract import KafkaJob, build_ack, summary_file_name, summary_object_key
 from minio_client import ObjectStore
 from mom import to_mom_response
 from setup import Clients
@@ -147,7 +147,9 @@ def process(job: KafkaJob, c: Clients) -> dict:
             mom["item_groups"] = groups
 
         docx_bytes = build_mom_docx(mom, meta)
-        bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest()),
+        # Downloaded as "MoM-<the user's file name>.docx", not as its hash — see summary_object_key.
+        bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest(),
+                                                        name=summary_file_name(job, mom.get("title") or "")),
                                      docx_bytes, DOCX_MIME)
         c.index.index_mom(job, mom, source="attached", summary_bucket=bucket, summary_object_key=key,
                           template={"name": template.name, "status": template.status,

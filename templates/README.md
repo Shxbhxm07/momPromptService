@@ -29,7 +29,7 @@ All names, addresses and file numbers in these files are **specimen values**, no
    `document_names` to match your file.
 3. **Read the acknowledgement** — Kafka UI → **Topics** → **mom-prompt.acks** → **Messages**.
    Set **Seek type** to **Oldest**, or you only see messages that arrive after the page opened.
-4. **Open the Word file** — MinIO console → **mom** → **test** → **summaries** → the newest `.docx`.
+4. **Open the Word file** — MinIO console → **mom** → **test** → **summaries** → the newest folder → `MoM-<your file name>.docx`.
    Its exact name is in the acknowledgement's `summaryObjectKey`.
 
 **Layout.** Every page of the minutes has the same margins: the text starts 1.30 in from the left edge on page 1 and on page 12 alike (0.5 in margin + the 0.8 in binding gutter, Part 1 paras 10.1-10.3). Before 16 Sep 26 alternate pages sat 0.8 in further left; if you still see that, you are testing an image built before that date.
@@ -72,7 +72,7 @@ sent over HTTP (where it is the response body as well). Match it to your request
   "action": "save",
   "message": "SUCCESS",
   "summaryBucketName": "mom",
-  "summaryObjectKey": "<tenantId>/summaries/<id>.docx",
+  "summaryObjectKey": "<tenantId>/summaries/<md5>/MoM-<file name>.docx",
   "description": "<the first sentence of the summary>"
 }
 ```

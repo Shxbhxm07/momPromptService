@@ -9,6 +9,9 @@ the very same object — while the acknowledgement is camelCase throughout (tena
 compareMode). Reading both spellings costs one helper and removes a whole class of silent
 mis-wiring, where a renamed field simply arrives as None and the job processes the wrong thing.
 """
+import os
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -215,12 +218,65 @@ def build_ack(job: KafkaJob, *, success: bool, description: str,
     return ack
 
 
-def summary_object_key(job: KafkaJob, digest: str, ext: str = "docx", folder: str = "summaries") -> str:
-    """Tenant-scoped path, matching the reference: {tenantId}/summaries/{hash}.{ext}
+def summary_object_key(job: KafkaJob, digest: str, ext: str = "docx", folder: str = "summaries",
+                       name: str = "") -> str:
+    """Tenant-scoped path: {tenantId}/summaries/{hash}/{name}.{ext}, or {hash}.{ext} with no name.
 
     The newer backend sends no tenant, and "" would produce a key starting with "/" — a folder
     named nothing, at the bucket root. The conversation id takes its place, then the user id, and
     "shared" only if a message carried none of the three.
+
+    WHY THE HASH BECAME A FOLDER. The minutes used to be stored as `{hash}.docx`, and a download is
+    named after the key's last part, so users got "78606119fe8f….docx". The name alone
+    (`summaries/MoM-notes.docx`) would let two meetings uploaded as "notes.pdf" in one tenant
+    overwrite each other, and an edit overwrite the version before it. Under its own hash folder
+    every version still has its own object, exactly as before, and downloads as `MoM-notes.docx`.
     """
     scope = (job.tenant_id or job.conversation_id or job.user_id or "shared").strip("/") or "shared"
+    if name:
+        return f"{scope}/{folder}/{digest}/{name}.{ext}"
     return f"{scope}/{folder}/{digest}.{ext}"
+
+
+# A "file name" that is really a storage id — the backend's upload keys are hashes and UUIDs — is no
+# name at all: "MoM-9f3a51c0….docx" is the very kind of name summary_file_name replaces.
+_STORAGE_ID = re.compile(r"[0-9a-f]{16,}|[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.I)
+# What breaks an object key, a URL built by joining strings, or a download's Content-Disposition
+# header (an unquoted comma or semicolon there fails the download in Chrome). Replaced with "_";
+# everything else stays as the user typed it, spaces and Hindi included.
+_UNSAFE = re.compile(r'[\\/:*?"<>|#%{}^~\[\]`+&=;,$@]')
+MAX_NAME_CHARS = 100
+
+
+def _file_stem(name: str) -> str:
+    """The user's file name, made safe for a MinIO key, without its extension. "" if it is no name."""
+    name = str(name or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    stem, ext = os.path.splitext(name)
+    # Only a document extension is dropped: "Review 12.09.2026" keeps its ".2026".
+    if ext.lower() in _READABLE_EXTENSIONS:
+        name = stem
+    if _STORAGE_ID.fullmatch(name.strip()):
+        return ""
+    # Control and invisible formatting characters go entirely — a right-to-left override would make
+    # the name display as something other than it is.
+    name = "".join(ch for ch in name if not unicodedata.category(ch).startswith("C"))
+    name = " ".join(_UNSAFE.sub("_", name).split()).strip(" ._-")
+    if len(name) > MAX_NAME_CHARS:
+        cut = name[:MAX_NAME_CHARS]
+        name = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" ._-")
+    return name
+
+
+def summary_file_name(job: KafkaJob, title: str = "") -> str:
+    """What the minutes are called: "MoM-" + the name of the file the user gave, without extension.
+
+    The first document with a real name wins — its `document_names` entry (or `fileName`), else the
+    last part of its MinIO key, the same name the reader used. A prompt with no document has no file
+    name, so the meeting's title stands in; with neither, the minutes are plain "MoM".
+    """
+    names = [(job.document_names[i] if i < len(job.document_names) else "") or url.rsplit("/", 1)[-1]
+             for i, url in enumerate(job.file_urls)] or list(job.document_names)
+    for stem in (_file_stem(n) for n in [*names, title]):
+        if stem:
+            return f"MoM-{stem}"
+    return "MoM"
