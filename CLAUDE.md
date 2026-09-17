@@ -47,6 +47,8 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
 | `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
 | `tools/check_jssd_layout.py` | **the layout conformance check** — renders a specimen and asserts 38 rules of the manual on it, page by page. Run after any `docx_export.py` change |
+| `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
+| `app/minutes_state.py` | what a finished job leaves in MinIO so the next prompt can edit it: the minutes, the header, the ITEM grouping, and a history for undo |
 | `app/prompt_leak.py` | drops the user's own request when the writer minutes it as a decision or an action |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
@@ -135,6 +137,45 @@ problem never fails a job; the outcome is in the log and in Elasticsearch (`temp
 
 Not done, deliberately: a template's non-standard layout, letterhead image or Hindi headings are not copied —
 the minutes follow the manual and are English.
+
+## Editing — a second prompt changes the minutes (built 2026-09-17)
+
+`{"mode": "edit", "conversationId": <the same one>, "prompt": "change the venue to Conference Room B"}`.
+No document, no template, no `mom_meta` needed. `mode` is also read as `momMode` / `requestType`, and
+accepts edit | update | revise | modify | change — **confirm the real field name with the backend developer.**
+
+Why not re-run the job with the old prompt plus the new instruction: measured on the cluster, the SAME job
+run twice gave 5 ITEMs then 4, 132 paragraphs then 126, 15 decisions then 13. One change would hand back a
+different document. Why not let the model rewrite the minutes: it silently drops and rewords lines nobody
+asked about, and nothing can check that.
+
+So the model is shown the saved minutes as numbered lists and may answer ONLY with changes —
+`set_meta`, `set_title`, `delete`, `replace`, `add`, `set_owner`, `set_role`, `undo`, `cannot` — each naming
+its target by INDEX and quoting the line it means. Code applies them. **Four guards, none optional:**
+1. **Wrong line** — a quote that does not match the line at that index is dropped, so "point 41" cannot hit 42.
+2. **Invented detail** — names and numbers in new text must already be in the instruction, the minutes or the
+   header ("31 Dec 2027" is refused when the user said "30 Sep"). Months are matched Sep/September either way.
+3. **Classification and precedence are never editable from chat text** (`EDITABLE_META`), so a misread
+   "remove the secret part" cannot declassify a document. Same rule as templates.
+4. **Nothing else moves** — untouched lines are copied exactly, and `_regroup` remaps the ITEM grouping from
+   the old lines to the new with difflib instead of grouping again, so ITEMs do not reshuffle and no second
+   model call is made. Deletions are applied last, together, so indices never shift underneath.
+
+`minutes_state` writes `{scope}/minutes-state/{conversationId}.json` beside the .docx — the minutes, the
+merged header, the template's contribution, and a history of the last 10 versions. Every version's .docx
+stays in MinIO under its own hash, which is what makes `undo` work. **Minutes written before 2026-09-17 have
+no state file and cannot be edited**; the ack says so and the job is untouched.
+
+Verified with no model calls and no cluster: 12 guard tests (right line deleted, wrong quote skipped, index
+out of range refused, three deletions at once, invented date refused, classification refused, role fixed,
+ITEM remap on delete and on add) and 15 end-to-end (two changes in one prompt → the new venue in the title,
+the named point gone, the other eight kept, three ITEMs intact, untouched content carried through; undo
+restores the previous version and keeps the edited file; an impossible edit and an unknown conversation both
+fail with a sentence a user can read). `tools/check_jssd_layout.py` still passes all 38 rules.
+
+**Not done yet:** one real model call. The JSON-schema mechanism is already proven on watsonx by
+`agenda_items`, so the untested part is only how well the model picks the right indices — which the first
+cluster test shows.
 
 ## The contract
 

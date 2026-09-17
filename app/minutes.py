@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 
 import agenda_items
 import document_checker
+import minutes_state
 import prompt_leak
 import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
@@ -100,6 +101,12 @@ def process(job: KafkaJob, c: Clients) -> dict:
     """One job → an acknowledgement. Never raises: a crash here would lose the ack."""
     t0 = time.time()
     try:
+        # A second prompt changing minutes this conversation already has takes a different path
+        # entirely: no document is read and no minutes are written again. Imported here rather than
+        # at the top because minutes_edit imports this module back for the shared pieces.
+        if job.is_edit:
+            import minutes_edit
+            return minutes_edit.process(job, c)
         if not job.prompt and not job.file_urls:
             raise ValueError("Nothing to write minutes from: the job has no prompt and no file_urls.")
         documents = _read_documents(job, c.store)
@@ -148,6 +155,12 @@ def process(job: KafkaJob, c: Clients) -> dict:
         # Last, and it never raises: the minutes are stored by now, and a failed search copy must not
         # turn a finished job into a failed one. Does nothing until ENABLE_CHUNK_INDEX and CHUNK_INDEX.
         c.chunks.index_mom(job, mom, summary_bucket=bucket, summary_object_key=key)
+        # What a later prompt needs to EDIT these minutes rather than write them again: the minutes
+        # themselves, the header this job assembled, and the ITEM grouping. Never fatal — see
+        # minutes_state. Only after the file is stored, so the state can never point at nothing.
+        minutes_state.save(job, c.store, mom=mom, meta=meta, object_key=key, bucket=bucket,
+                           template={"name": template.name, "status": template.status,
+                                     "fields": from_template})
         if job.template_url:
             logger.info(f"[JOB {job.conversation_id}] template {template.name!r}: {template.status}"
                         + (f", used {from_template}" if from_template else "")
@@ -157,4 +170,8 @@ def process(job: KafkaJob, c: Clients) -> dict:
                          description=one_sentence(mom.get("summary") or ""))
     except Exception as e:
         logger.error(f"[JOB {job.conversation_id}] failed after {time.time()-t0:.0f}s: {e}")
-        return build_ack(job, success=False, description=f"{type(e).__name__}: {e}")
+        # ValueError is only ever raised here with a sentence meant for the user, so it is passed on
+        # as it stands. Any other exception keeps its class name, which is what makes a MinIO or model
+        # failure diagnosable from the ack alone.
+        return build_ack(job, success=False,
+                         description=str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}")

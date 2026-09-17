@@ -142,6 +142,33 @@ content always comes from the prompt**. Upload `sample_template_unit.docx` to `m
 
 A template problem never fails the job — the minutes are still produced.
 
+## Changing the minutes with a second prompt
+
+Send the SAME `conversationId` again with `"mode": "edit"` and a prompt saying what to change. No document
+and no template are needed. Only what you ask for changes; every other line stays exactly as it was.
+
+```json
+{
+  "tenant_id": "test", "conversationId": "<the same one>", "mode": "edit",
+  "prompt": "Change the venue to Conference Room B, remove the point about the website, and make Ananya Krishnan the Chairman."
+}
+```
+
+| ask for | expected |
+|---|---|
+| change the venue, date, time, file reference, amendments date, telephone or secretary | done; the title and header change |
+| remove / reword a point, decision or action | done; everything else is untouched |
+| add an action with an owner and a due date **you state** | done |
+| set an attendee as Chairman or Secretary | done; they move to the top or bottom of the list |
+| "undo that" | the previous version comes back; the edited file stays in MinIO |
+| change the **classification** | refused — classification comes only from `mom_meta` |
+| a due date or a name you never gave | refused, and the ack says which words were not yours |
+| "focus more on the budget" | FAILED — that needs the document read again; send a new job instead |
+| an edit for a `conversationId` that has no minutes | FAILED — *No minutes to edit* |
+
+The acknowledgement's `description` lists what changed, e.g. *"venue → Conference Room B; removed from
+key_points: …"*. Minutes generated before 17 Sep 26 cannot be edited — generate them once more first.
+
 ## Negative tests
 
 | send | expected |

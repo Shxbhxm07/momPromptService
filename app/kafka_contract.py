@@ -55,6 +55,16 @@ class KafkaJob:
     raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
+    def is_edit(self) -> bool:
+        """A change to minutes already written, not a new meeting — see minutes_edit.
+
+        The backend marks it with `mode`. The exact field name is still to be confirmed with the
+        backend developer, so the usual spellings are all read (see parse_job) and several words are
+        accepted: a screen may call it edit, update or revise for the same button.
+        """
+        return self.mode.strip().lower() in EDIT_MODES
+
+    @property
     def has_attachments(self) -> bool:
         return bool(self.file_urls)
 
@@ -76,11 +86,16 @@ class KafkaJob:
 _INPUT_FIELDS = frozenset({
     "prompt", "file_urls", "fileUrls", "document_names", "documentNames", "document_ids", "documentIds",
     "file_fids", "fileFids", "fIds", "tenant_id", "conversation_id", "compare_mode", "mode",
+    "momMode", "mom_mode", "requestType", "request_type",
     "mom_meta", "momMeta", "template_url", "templateUrl", "template_name", "templateName",
 })
 # 2. The RESULT — the only fields the service writes. A value the job itself carried for one of
 #    these (a resent ack, say) is ignored, never echoed as if it were the outcome.
 _RESULT_FIELDS = frozenset({"action", "message", "description", "summaryBucketName", "summaryObjectKey"})
+
+
+# What `mode` may say for "change the minutes I already have".
+EDIT_MODES = frozenset({"edit", "update", "revise", "modify", "change"})
 
 
 def _dict(value: Any) -> Dict[str, Any]:
@@ -140,7 +155,7 @@ def parse_job(msg: Dict[str, Any]) -> KafkaJob:
         tenant_id=_get(msg, "tenant_id", "tenantId", default="") or "",
         user_id=_get(msg, "userId", "user_id", default="") or "",
         conversation_id=_get(msg, "conversationId", "conversation_id", default="") or "",
-        mode=_get(msg, "mode", default="") or "",
+        mode=_get(msg, "mode", "momMode", "mom_mode", "requestType", "request_type", default="") or "",
         compare_mode=_get(msg, "compare_mode", "compareMode", default="") or "",
         document_ids=list(_get(msg, "document_ids", "documentIds", default=[]) or []),
         file_urls=_paths(msg),
