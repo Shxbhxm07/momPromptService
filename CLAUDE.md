@@ -50,6 +50,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
 | `app/minutes_state.py` | what a finished job leaves in MinIO so the next prompt can edit it: the minutes, the header, the ITEM grouping, and a history for undo |
 | `app/prompt_leak.py` | drops the user's own request when the writer minutes it as a decision or an action |
+| `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
@@ -375,6 +376,21 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   ("Carroll", "Comptroller") dropped because the transcript's speech-to-text spelling differs; 11 pages for a
   15-minute meeting. Candidate fixes, in order: meeting date only from mom_meta or an explicit statement;
   ground decisions and actions like key points; brevity for JSSD.
+- **Wrong meeting date — fixed 2026-09-18** (`app/meeting_date.py`). The writer's prompt already said "only
+  the date of THIS meeting" and watsonx still took "approval of the **February 17 2022** meeting minutes".
+  Now code checks it: the model's date is kept only if some place in the source where that date is written
+  is introduced as this meeting's by the words just before it ("held on", "convened on", "Date:", "today
+  is"…), with no "last/next/previous…" in that window and no nearer "minutes/approval/due/by…". A date the
+  job sent in `mom_meta` is always kept (and wins in the title anyway). Unsure → blank, never guessed; a
+  blank date just drops "ON <date>" from the title. 19 of 19 cases on the real sources: t2 dropped in three
+  spellings, LEP "today is January 28th" kept and its last/next-meeting dates dropped, t3.doc "Date: 16
+  September 2026" kept, "held on …" prompts kept, "next meeting will be held on …" dropped.
+- **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
+  JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
+  made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in
+  the ACTION column against it (16.8), and Appendix AD draws exactly that (`6. Decision. …  SGO  SO (Ops)`).
+  What was wrong in `ocp-combo-004`'s 14 "decisions" is the entries that are not decisions at all — a fact
+  ("permits expire on June 30th"), a procedure ("a vote on the adjournment was called"), a duplicate.
 - **Full layout audit against the manual, 2026-09-16 — every page, every element.** Triggered by the
   margin bug below, which a page-1-only audit had missed. Ground truth re-read from the PDF:
   **Appendix AD is at PDF pages 52, 53, 54** (printed 328-330), its **explanatory notes 1-6 at PDF 58-59**

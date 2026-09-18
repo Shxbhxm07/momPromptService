@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 
 import agenda_items
 import document_checker
+import meeting_date
 import minutes_state
 import prompt_leak
 import template_details
@@ -129,6 +130,14 @@ def process(job: KafkaJob, c: Clients) -> dict:
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
+
+        # With no meeting_date in mom_meta the title takes the writer's, and the writer has taken it
+        # from another meeting — "approval of the February 17 2022 meeting minutes". Kept only when the
+        # source gives it as this meeting's date; see meeting_date for the test.
+        dropped = meeting_date.check(mom, source, job.mom_meta.get("meeting_date"))
+        if dropped:
+            logger.info(f"[JOB {job.conversation_id}] meeting date {dropped!r} dropped — the source "
+                        "never gives it as this meeting's date")
 
         # compose_source labels the prompt "USER'S REQUEST FOR THESE MINUTES" and the writer still
         # minutes it now and then — a real run printed "Decision. Prepare the minutes of the meeting."
