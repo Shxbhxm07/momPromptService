@@ -109,6 +109,10 @@ spec:
               value: "2"
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
+            # At most this many discussion points per ITEM (JSSD Ch 6 para 10: only the essence).
+            # Decisions, actions and figures are never cut. "0" keeps every point, as before.
+            - name: ESSENCE_POINTS_PER_ITEM
+              value: "4"
             - name: WATSONX_API_KEY
               value: "CHANGE_ME"
           resources:

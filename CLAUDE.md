@@ -50,6 +50,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
 | `app/minutes_state.py` | what a finished job leaves in MinIO so the next prompt can edit it: the minutes, the header, the ITEM grouping, and a history for undo |
 | `app/prompt_leak.py` | drops the user's own request when the writer minutes it as a decision or an action |
+| `app/essence.py` | **brevity**: one model call picks, BY INDEX, at most `ESSENCE_POINTS_PER_ITEM` (4) discussion points per ITEM to keep (Ch 6 para 10). Never writes text; decisions, actions and figures never cut; any doubt → full length. Dropped points leave `key_points` for real so state, search and edits match the Word file |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
@@ -385,6 +386,17 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   blank date just drops "ON <date>" from the title. 19 of 19 cases on the real sources: t2 dropped in three
   spellings, LEP "today is January 28th" kept and its last/next-meeting dates dropped, t3.doc "Date: 16
   September 2026" kept, "held on …" prompts kept, "next meeting will be held on …" dropped.
+- **Minutes too long — step 1 built 2026-09-18** (`app/essence.py`, after `agenda_items.group`). The model sees
+  each ITEM's numbered points, its decisions and its figures, and returns only the indices to keep, at most
+  `ESSENCE_POINTS_PER_ITEM` (default 4; 3× that when there is a single ITEM; 0 = off). Code keeps only indices
+  from that ITEM, drops repeats and anything past the cap, and leaves the minutes at full length on a failed
+  call, bad JSON, or fewer than half the long ITEMs answered. Rejected: `MOM_WINDOW_KEY_POINTS=false` (that pass
+  IS the quote grounding) and dropping the writer's "no specific detail" points (a wording flag, not importance).
+  18 offline tests with a faked reply. One real call on the cluster's 12-page t2 minutes (read back from the
+  .docx): **68 → 15 points in ~3 s, 10 → 7 pages** re-rendered; every figure the dropped points carried is still
+  printed in the ITEM's figures list, because figures are never cut. Showing the figures to the model stopped
+  it spending picks on points that only repeat one. What fills the pages now: 22 "Decision." lines and 25
+  figure lines — the non-decisions among them are the next fix.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

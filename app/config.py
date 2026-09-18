@@ -8,6 +8,10 @@ import os
 # and the rest. Only the one setting this service passes to it on each call lives here. There is no
 # LLAMA_URL any more: nothing is reached over HTTP.
 MOM_TEMPERATURE = float(os.getenv("MOM_TEMPERATURE", "0.05"))
+# At most this many discussion points per ITEM survive (essence.py): the manual wants "only the essence
+# leading to the conclusion" (Ch 6 para 10) and AD draws one or two per item. Decisions, actions and
+# figures are never cut. 0 turns the step off and keeps every point the writer produced.
+ESSENCE_POINTS_PER_ITEM = int(os.getenv("ESSENCE_POINTS_PER_ITEM", "4"))
 
 # ── what a job may carry ───────────────────────────────────────────────────────
 # Below this many characters of prompt + document text there is no meeting to write up, and the model

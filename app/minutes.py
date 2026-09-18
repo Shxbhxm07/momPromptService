@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple
 
 import agenda_items
 import document_checker
+import essence
 import meeting_date
 import minutes_state
 import prompt_leak
@@ -154,6 +155,14 @@ def process(job: KafkaJob, c: Clients) -> dict:
         groups = agenda_items.group(mom, points, decisions, figures)
         if groups:
             mom["item_groups"] = groups
+
+        # Only the essence of the discussion (Ch 6 para 10): a real run gave 12 pages for a 15-minute
+        # meeting. One call picks which points each ITEM keeps, by index; decisions and actions are never
+        # cut, and any doubt leaves the minutes at full length. See essence.
+        shortened = essence.select(mom, points, decisions, figures, groups)
+        if shortened:
+            logger.info(f"[JOB {job.conversation_id}] kept {shortened[1]} of {shortened[0]} discussion "
+                        "points, the essence per item")
 
         docx_bytes = build_mom_docx(mom, meta)
         # Downloaded as "MoM-<the user's file name>.docx", not as its hash — see summary_object_key.
