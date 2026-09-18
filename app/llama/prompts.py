@@ -17,7 +17,7 @@ GLOBAL RULES — apply all of these:
 8. MEETING DATE/TIME: Fill header.meeting_date / header.meeting_time only when a date or time is explicitly given as the date/time of THIS meeting (e.g. "today's meeting is on X", "aaj X tarikh hai"). For any other date — birthdays, deadlines, milestones, historical events, contract dates — leave those fields "" so the system fills the default.
 9. SELF-CORRECTIONS: When a speaker states a value then corrects it (e.g. "it was 90–95%... I would say 80–85%", "actually it is X not Y"), use only the final corrected value.
 10. SPEAKER ATTRIBUTION: Each [speaker_N] tag is a distinct person. Attribute every SPEAKER-WISE NOTES bullet to the speaker who actually said it, keep each [speaker_N] as its own separate section (even when [speaker_2] and [speaker_3] discuss the same topic back-to-back, and even when one is named and the other is not), and when one speaker completes another's cut-off sentence, credit the completion to the speaker who finished it. Shared or continuous topic never means it is the same speaker.
-11. CURRENCY & FIGURES — PRESERVE MAGNITUDE EXACTLY: Money is stated in Indian notation (rupees, thousand, lakh, crore). Write every amount at the SAME magnitude and unit the speaker used. "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount the transcript does not state — if the transcript gives three vendor percentages, do not add a fourth. Copy each figure exactly as spoken; do not re-total or round.
+11. CURRENCY & FIGURES — PRESERVE CURRENCY AND MAGNITUDE EXACTLY: Write every amount in the SAME currency, unit and magnitude the speaker used — never convert it, and never add a second currency in brackets: a dollar amount stays in dollars, a rupee amount in rupees. When money is stated in Indian notation (rupees, thousand, lakh, crore), keep that notation: "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount the transcript does not state — if the transcript gives three vendor percentages, do not add a fourth. Copy each figure exactly as spoken; do not re-total or round.
 
 
 NEVER-INVENT RULES — these override every other instruction, including any instruction to fill a field:
@@ -226,7 +226,7 @@ GLOBAL RULES:
 2. Use ONLY facts present in the partial analyses. Do not add any new information.
 3. Put each list item as a separate array element. Fill every field; use an empty array [] (or "" for summary/purpose) if empty across all partials.
 4. Output nothing before or after the JSON.
-5. CURRENCY & FIGURES — PRESERVE MAGNITUDE EXACTLY: Money is stated in Indian notation (rupees, thousand, lakh, crore). Keep every amount at the SAME magnitude and unit the partials used. "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount not present in the partials. Copy each figure exactly; do not re-total or round.
+5. CURRENCY & FIGURES — PRESERVE CURRENCY AND MAGNITUDE EXACTLY: Keep every amount in the SAME currency, unit and magnitude the partials used — never convert it, and never add a second currency in brackets: a dollar amount stays in dollars, a rupee amount in rupees. When money is stated in Indian notation (rupees, thousand, lakh, crore), keep that notation: "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount not present in the partials. Copy each figure exactly; do not re-total or round.
 
 
 NEVER-INVENT RULES — these override every other instruction, including any instruction to fill a field:
@@ -409,7 +409,10 @@ RULES — these are what make this pass worth running:
 • Do NOT include a figure that was only hypothetical or explicitly rejected, unless the speaker
   stated it as the agreed number.
 
-Output ONLY a bullet list in ENGLISH. Each bullet = one figure with its label. No explanations.
+Output ONLY a bullet list in ENGLISH. Each bullet = one figure with its label. No explanations, no
+introduction, no closing note.
+The example below shows the FORMAT only. Its numbers and labels are NOT from this meeting — never output
+them; every figure you write must be stated in the transcript you were given.
 Example:
 • Current budget total — Rs 7,30,340
 • Target budget — Rs 7,14,000
@@ -671,7 +674,7 @@ GLOBAL RULES — apply all of these:
 9. MEETING DATE/TIME: Use a date or time in the header only when it is explicitly given as the date/time of THIS meeting (e.g. "today's meeting is on X", "aaj X tarikh hai"). For any other date — birthdays, deadlines, milestones, historical events, contract dates — use the FALLBACK DATE from the user message.
 10. SELF-CORRECTIONS: When a speaker states a value then corrects it (e.g. "it was 90–95%... I would say 80–85%", "actually it is X not Y"), use only the final corrected value.
 11. SPEAKER ATTRIBUTION: Each [speaker_N] tag is a distinct person. Attribute every SPEAKER-WISE NOTES bullet to the speaker who actually said it, keep each [speaker_N] as its own separate section (even when [speaker_2] and [speaker_3] discuss the same topic back-to-back, and even when one is named and the other is not), and when one speaker completes another's cut-off sentence, credit the completion to the speaker who finished it. Shared or continuous topic never means it is the same speaker.
-12. CURRENCY & FIGURES — PRESERVE MAGNITUDE EXACTLY: Money is stated in Indian notation (rupees, thousand, lakh, crore). Write every amount at the SAME magnitude and unit the speaker used. "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount the transcript does not state — if the transcript gives three vendor percentages, do not add a fourth. Copy each figure exactly as spoken; do not re-total or round.
+12. CURRENCY & FIGURES — PRESERVE CURRENCY AND MAGNITUDE EXACTLY: Write every amount in the SAME currency, unit and magnitude the speaker used — never convert it, and never add a second currency in brackets: a dollar amount stays in dollars, a rupee amount in rupees. When money is stated in Indian notation (rupees, thousand, lakh, crore), keep that notation: "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount the transcript does not state — if the transcript gives three vendor percentages, do not add a fourth. Copy each figure exactly as spoken; do not re-total or round.
 
 
 NEVER-INVENT RULES — these override every other instruction, including any instruction to fill a field:
@@ -896,7 +899,7 @@ GLOBAL RULES:
 2. Use ONLY facts present in the partial analyses. Do not add any new information.
 3. Use • for every bullet. Fill every section. Write "None explicitly stated." if empty across all partials.
 4. Write nothing before the === line.
-5. CURRENCY & FIGURES — PRESERVE MAGNITUDE EXACTLY: Money is stated in Indian notation (rupees, thousand, lakh, crore). Keep every amount at the SAME magnitude and unit the partials used. "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount not present in the partials. Copy each figure exactly; do not re-total or round.
+5. CURRENCY & FIGURES — PRESERVE CURRENCY AND MAGNITUDE EXACTLY: Keep every amount in the SAME currency, unit and magnitude the partials used — never convert it, and never add a second currency in brackets: a dollar amount stays in dollars, a rupee amount in rupees. When money is stated in Indian notation (rupees, thousand, lakh, crore), keep that notation: "three lakh ninety-eight thousand rupees" is Rs 3,98,000 — write it as ₹3.98 lakh or ₹3,98,000, NEVER as "₹3.98 million" (that is 10x too large). Conversions: 1 lakh = ₹1,00,000; 10 lakh = ₹1 million; 1 crore = ₹1,00,00,000. Never turn a lakh/thousand figure into "million". Never invent a number, percentage, or amount not present in the partials. Copy each figure exactly; do not re-total or round.
 
 
 NEVER-INVENT RULES — these override every other instruction, including any instruction to fill a field:

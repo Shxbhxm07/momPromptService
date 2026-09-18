@@ -39,7 +39,7 @@ class _TokenCache:
                 return self._token
             self._token, ttl = self._fetch()
             self._expires_at = self._now() + ttl
-            logger.info("[IBM] %s token refreshed — good for %ss", type(self).__name__, int(ttl))
+            logger.debug("[IBM] %s token refreshed — good for %ss", type(self).__name__, int(ttl))
             return self._token
 
     def _fetch(self):

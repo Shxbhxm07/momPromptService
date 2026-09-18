@@ -23,10 +23,21 @@ needed shortening leave the minutes exactly as the writer produced them. An ITEM
 answers with nothing valid, keeps all its points. Indices from another ITEM, repeats, and anything past
 the cap are dropped in code, not trusted.
 
+NO REPLY GROWS WITH THE MEETING. The first version asked for the whole meeting in one call; on a
+3-hour meeting (t4, 765 points in one ITEM) the model listed far more than the cap, the reply hit its
+800-token limit, and nothing was shortened — 57 pages. Now each long ITEM gets its own call, at most
+BATCH points per call with a proportional share of the cap, and the model returns its picks RANKED,
+most important first: code keeps the top of the list, so even an over-long answer is usable.
+
+A PLAIN LINE, NOT JSON. Asked for {"keep": [...]} under a strict JSON schema, the model host returned
+just "{"; under plain JSON mode, only whitespace until the token limit — the trap the writer's window
+pass documents. Asked for one line of numbers ("107, 110, 117, 130") it answered in about a second,
+with exactly the cap, every time (t4, 2026-09-18). Numbers are read from the line; the cap, the range
+check and the rest are still enforced here.
+
 The dropped points are removed from `key_points` for real and the ITEM groups renumbered, so the stored
 state, the search record and a later edit all see the same minutes the Word file shows.
 """
-import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,15 +52,22 @@ SINGLE_ITEM_FACTOR = 3
 MIN_ANSWERED = 0.5
 # Points are shown shortened: enough to judge whether a point carries a fact, not the whole sentence.
 SNIPPET = 220
-MAX_REPLY_TOKENS = 800
+# Points per call; a longer ITEM is split and each part gets its share of the cap.
+BATCH = 80
+# Reply budget: enough for one line listing every point shown (~4 tokens a number), should the model
+# ignore the cap. Only the top of the list is used, and the cap's worth always fits.
+_TOKENS_PER_INDEX = 4
+_REPLY_OVERHEAD = 60
+_NUMBER = re.compile(r"\d+")
 
-_SYSTEM = """You are given the minutes of a meeting that were already written and checked: for each ITEM, its
-numbered POINTS of discussion, the DECISIONS that item reached, and the FIGURES printed under it.
+_SYSTEM = """You are given one ITEM from the minutes of a meeting that were already written and checked: its
+numbered POINTS of discussion, the DECISIONS it reached, and the FIGURES printed under it.
 
 Official minutes record only the essence of the discussion that led to each decision, not everything that
-was said. For each ITEM, choose AT MOST {cap} points to keep.
+was said. List the points worth keeping, MOST IMPORTANT FIRST, at most {cap}.
 
-Answer with INDEX NUMBERS ONLY. Never write, reword, translate or invent any text.
+Answer with ONE LINE: the numbers of the points to keep, most important first, separated by commas —
+for example: 112, 105, 130. Nothing else: never write, reword or invent any text.
 
 Prefer points that:
 - explain why a decision was taken, or what it depends on;
@@ -62,15 +80,7 @@ Leave out points that:
 - only say that something was discussed, mentioned, presented or reviewed, without saying what;
 - are greetings, introductions, thanks, procedure or small talk.
 
-Only choose points listed under that same ITEM. Keep at least one point for every ITEM."""
-
-_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["items"],
-    "properties": {"items": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False, "required": ["item", "keep"],
-        "properties": {"item": {"type": "integer"},
-                       "keep": {"type": "array", "items": {"type": "integer"}}}}}},
-}
+Only use point numbers from the list. Keep at least one."""
 
 _WS = re.compile(r"\s+")
 
@@ -79,37 +89,41 @@ def _short(text: Any) -> str:
     return _WS.sub(" ", str(text)).strip()[:SNIPPET]
 
 
-def _prompt(items: List[Dict[str, Any]], points: List[str], decisions: List[Any], figures: List[str]) -> str:
-    blocks = []
-    for k, it in enumerate(items):
-        lines = [f"ITEM {k} – {_short(it['title'])}", "POINTS:"]
-        lines += [f"{i}. {_short(points[i])}" for i in it["points"]]
-        said = [decisions[j] for j in it.get("decisions") or [] if 0 <= j < len(decisions)]
-        if said:
-            lines.append("DECISIONS:")
-            lines += [f"- {_short(d[0] if isinstance(d, (list, tuple)) else d)}" for d in said]
-        quoted = [figures[j] for j in it.get("figures") or [] if 0 <= j < len(figures)]
-        if quoted:
-            lines.append("FIGURES:")
-            lines += [f"- {_short(f)}" for f in quoted]
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _prompt(item: Dict[str, Any], batch: List[int], points: List[str], decisions: List[Any],
+            figures: List[str]) -> str:
+    lines = [f"ITEM – {_short(item['title'])}", "POINTS:"]
+    lines += [f"{i}. {_short(points[i])}" for i in batch]
+    said = [decisions[j] for j in item.get("decisions") or [] if 0 <= j < len(decisions)]
+    if said:
+        lines.append("DECISIONS:")
+        lines += [f"- {_short(d[0] if isinstance(d, (list, tuple)) else d)}" for d in said]
+    quoted = [figures[j] for j in item.get("figures") or [] if 0 <= j < len(figures)]
+    if quoted:
+        lines.append("FIGURES:")
+        lines += [f"- {_short(f)}" for f in quoted]
+    return "\n".join(lines)
 
 
-def _ask(items: List[Dict[str, Any]], points: List[str], decisions: List[Any], figures: List[str],
-         cap: int) -> Dict[str, Any]:
+def _ask(item: Dict[str, Any], batch: List[int], points: List[str], decisions: List[Any],
+         figures: List[str], cap: int) -> List[int]:
+    """The model's picks for one batch of one ITEM, ranked, as it sent them (checked by the caller)."""
     from mom import _get_writer
     reply = _get_writer().generate(
-        _SYSTEM.format(cap=cap), _prompt(items, points, decisions, figures),
-        max_new_tokens=MAX_REPLY_TOKENS, temperature=0.0,
-        extra={"response_format": {"type": "json_schema",
-                                   "json_schema": {"name": "essence", "schema": _SCHEMA, "strict": True}}})
-    try:
-        data = json.loads(reply)
-    except (TypeError, ValueError):
-        from llama.localization.mom_i18n import _extract_json, _repair_json
-        data = _extract_json(_repair_json(reply or "")) if reply else None
-    return data if isinstance(data, dict) else {}
+        _SYSTEM.format(cap=cap), _prompt(item, batch, points, decisions, figures),
+        max_new_tokens=_REPLY_OVERHEAD + _TOKENS_PER_INDEX * len(batch), temperature=0.0)
+    return [int(x) for x in _NUMBER.findall(reply or "")]
+
+
+def _shares(sizes: List[int], limit: int) -> List[int]:
+    """The cap split across one ITEM's batches in proportion to their size, adding up to exactly
+    `limit` (largest remainder). A small last batch can get 0 and is then not asked at all — rounding
+    each batch up to 1 had let a 170-point ITEM keep 5 against a cap of 4."""
+    total = sum(sizes)
+    exact = [limit * n / total for n in sizes]
+    shares = [int(x) for x in exact]
+    for i in sorted(range(len(sizes)), key=lambda i: exact[i] - shares[i], reverse=True)[:limit - sum(shares)]:
+        shares[i] += 1
+    return shares
 
 
 def select(mom: Dict[str, Any], points: List[str], decisions: List[Any], figures: List[str],
@@ -134,28 +148,46 @@ def select(mom: Dict[str, Any], points: List[str], decisions: List[Any], figures
     if not long:
         return None
 
-    try:
-        data = _ask(items, points, decisions, figures, limit)
-    except Exception as e:
-        logger.warning(f"essence call failed ({type(e).__name__}: {e}) — minutes kept at full length")
-        return None
+    from concurrent.futures import ThreadPoolExecutor
+    from llama.config import LLM_CONCURRENCY
+
+    # One call per BATCH points of each long ITEM, each with its share of the cap.
+    calls = []
+    for k in long:
+        own = items[k]["points"]
+        batches = [own[s:s + BATCH] for s in range(0, len(own), BATCH)]
+        calls += [(k, b, n) for b, n in zip(batches, _shares([len(b) for b in batches], limit)) if n]
+
+    def one(call):
+        k, batch, share = call
+        try:
+            return call, _ask(items[k], batch, points, decisions, figures, share)
+        except Exception as e:
+            logger.warning(f"essence call for item {k} failed ({type(e).__name__}: {e}) — "
+                           f"its {len(batch)} point(s) kept")
+            return call, None
+
+    with ThreadPoolExecutor(max_workers=max(1, LLM_CONCURRENCY)) as pool:
+        replies = list(pool.map(one, calls))
 
     chosen: Dict[int, List[int]] = {}
-    for entry in data.get("items") or []:
-        if not isinstance(entry, dict) or isinstance(entry.get("item"), bool) or not isinstance(entry.get("item"), int):
-            continue
-        k = entry["item"]
-        if k not in long or k in chosen:
-            continue
-        own, keep = items[k]["points"], []
-        for i in entry.get("keep") if isinstance(entry.get("keep"), list) else []:
-            if isinstance(i, int) and not isinstance(i, bool) and i in own and i not in keep:
+    answered = set()
+    for (k, batch, share), picks in replies:
+        allowed, keep = set(batch), []
+        for i in picks or []:
+            if isinstance(i, int) and not isinstance(i, bool) and i in allowed and i not in keep:
                 keep.append(i)
         if keep:
-            chosen[k] = sorted(keep, key=own.index)[:limit]      # printed in the ITEM's own order
+            answered.add(k)
+            chosen.setdefault(k, []).extend(keep[:share])     # the model's top picks, as it ranked them
+        else:
+            chosen.setdefault(k, []).extend(batch)            # nothing usable for this part: kept whole
+    for k in chosen:
+        own = items[k]["points"]
+        chosen[k] = sorted(chosen[k], key=own.index)          # printed in the ITEM's own order
 
-    if len(chosen) < MIN_ANSWERED * len(long):
-        logger.info(f"essence reply answered {len(chosen)} of {len(long)} long item(s) — "
+    if len(answered) < MIN_ANSWERED * len(long):
+        logger.info(f"essence answered {len(answered)} of {len(long)} long item(s) — "
                     "minutes kept at full length")
         return None
 
@@ -163,7 +195,7 @@ def select(mom: Dict[str, Any], points: List[str], decisions: List[Any], figures
     kept_by_item: List[List[int]] = []
     for k, it in enumerate(items):
         kept = chosen.get(k, it["points"])
-        if k in long and k not in chosen:
+        if k in long and k not in answered:
             logger.info(f"essence: no usable answer for item {k} — its {len(kept)} points kept")
         kept_by_item.append(list(range(len(new_points), len(new_points) + len(kept))))
         new_points += [points[i] for i in kept]
@@ -175,5 +207,5 @@ def select(mom: Dict[str, Any], points: List[str], decisions: List[Any], figures
             g["points"] = kept
         mom["item_groups"] = groups
     logger.info(f"essence: kept {len(new_points)} of {before} points "
-                f"({len(items)} item(s), at most {limit} each)")
+                f"({len(items)} item(s), at most {limit} each, {len(calls)} call(s))")
     return before, len(new_points)

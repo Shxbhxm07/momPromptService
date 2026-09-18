@@ -53,7 +53,7 @@ if _key_pool is None or len(_key_pool) == 0:
                 f"(Cloud Pak for Data, a local vLLM): {VLLM_API_BASE}")
     _key_pool = None
 else:
-    logger.info(f"[KeyPool] Loaded {len(_key_pool)} key(s) — pool active")
+    logger.debug(f"[KeyPool] Loaded {len(_key_pool)} key(s) — pool active")
 
 # Sent as the Bearer token when there is no pool. A local vLLM does not authenticate,
 # but httpx still needs some value for the header.
@@ -211,7 +211,7 @@ class LLMManager:
         # a token proves the key, the auth mode and the network. The model id cannot be checked,
         # so it is taken as configured, and a wrong one surfaces on the first request instead.
         if self._is_watsonx(self.api_base):
-            logger.info(f"Connecting to watsonx at: {self.api_base}")
+            logger.debug(f"Connecting to watsonx at: {self.api_base}")
             try:
                 self._bearer(health_key)
             except Exception as e:
@@ -411,7 +411,7 @@ class LLMManager:
         retried_budget = False   # allow ONE extended-budget retry if gpt-oss returns content=None
         for attempt in range(4):
             try:
-                logger.info(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
+                logger.debug(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
                 response = self.client.post(url, json=payload,
                                             headers={"Authorization": f"Bearer {self._bearer(key)}"})
                 response.raise_for_status()
@@ -688,7 +688,7 @@ class LLMManager:
         key, key_idx = self._get_key()
         for attempt in range(3):
             try:
-                logger.info(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
+                logger.debug(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
                 auth = {"Authorization": f"Bearer {key}"}
                 with self.client.stream("POST", url, json=payload, headers=auth) as response:
                         response.raise_for_status()
@@ -1095,10 +1095,13 @@ class LLMManager:
     @staticmethod
     def _bullets_to_list(text):
         """Split a focused-extraction bullet block into a clean list of strings."""
+        from llama.utils.text_utils import is_model_note
         out = []
         for line in (text or "").splitlines():
             line = line.strip().lstrip("•-*").strip()
-            if line and "none explicitly stated" not in line.lower():
+            # The model's own preamble and footnotes ("Here are the figures mentioned in the
+            # transcript.", "Note: ... some assumptions have been made") are not items of the meeting.
+            if line and "none explicitly stated" not in line.lower() and not is_model_note(line):
                 out.append(line)
         return out
 
@@ -1453,14 +1456,20 @@ class LLMManager:
             if not text:
                 continue
             nq = self._norm_quote(quote)
-            if len(nq) < self._MIN_QUOTE_CHARS or nq not in hay:
-                dropped.append((text, quote))
-                continue
-            kept.append(p)
+            # Two different reasons, logged as such: a real run printed "quote not in transcript:
+            # 'since 1985'" for words that ARE in the transcript — only too short to prove anything.
+            if len(nq) < self._MIN_QUOTE_CHARS:
+                dropped.append((text, quote, "quote too short to check"))
+            elif nq not in hay:
+                dropped.append((text, quote, "quote not in transcript"))
+            else:
+                kept.append(p)
         if dropped:
-            logger.info(f"[MOM] GROUNDING dropped {len(dropped)} unsupported point(s)")
-            for t, q in dropped[:5]:
-                logger.info(f"[MOM]   ✗ {t[:70]!r} — quote not in transcript: {q[:50]!r}")
+            short = sum(1 for d in dropped if d[2] == "quote too short to check")
+            logger.info(f"[MOM] GROUNDING dropped {len(dropped)} point(s): {len(dropped) - short} quote not "
+                        f"in transcript, {short} quote too short to check")
+            for t, q, why in dropped[:5]:
+                logger.info(f"[MOM]   ✗ {t[:70]!r} — {why}: {q[:50]!r}")
         return kept
 
     # Second attempt for a window whose schema-constrained reply failed. Strict JSON-schema decoding can
@@ -1554,10 +1563,14 @@ class LLMManager:
         # Windows are independent, so run them together. Sequentially this pass took 776s on a
         # 9-minute meeting against 189s for the whole previous pipeline; the work is all latency,
         # not compute on this box.
+        # A progress line every 20 windows: a 3-hour meeting has ~140 and spends ~10 minutes here, which
+        # read as a hung pod once the per-call lines were taken out of the log.
         raw_points = []
         with ThreadPoolExecutor(max_workers=WINDOW_CONCURRENCY) as pool:
-            for pts in pool.map(_one, enumerate(wins)):
+            for n, pts in enumerate(pool.map(_one, enumerate(wins)), 1):
                 raw_points.extend(pts)
+                if n % 20 == 0 and n < len(wins):
+                    logger.info(f"[MOM] windows {n}/{len(wins)} read, {len(raw_points)} point(s) so far")
 
         grounded = self._ground_points(raw_points, transcript)
 

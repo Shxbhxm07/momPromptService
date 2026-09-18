@@ -80,6 +80,6 @@ def load_pool_from_env(multi_var=None):
         raw = os.getenv(var, "")
         keys = list(dict.fromkeys(k.strip() for k in raw.split(",") if k.strip()))
         if keys:
-            logger.info(f"[KeyPool] {len(keys)} key(s) loaded from {var}")
+            logger.debug(f"[KeyPool] {len(keys)} key(s) loaded from {var}")
             return KeyPool(keys)
     return None

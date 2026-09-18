@@ -79,6 +79,10 @@ spec:
               value: "true"
             - name: CHUNK_INDEX
               value: "mom_v1"
+            # The platform's repository index (checked in Kibana). A file picked "From repository" is read
+            # from its chunks here, by fId; an attached file is read from MinIO. Read-only.
+            - name: REPOSITORY_INDEX
+              value: "teamsync_v1"
             - name: ELASTIC_USER
               value: "CHANGE_ME"
             - name: ELASTIC_PASSWORD

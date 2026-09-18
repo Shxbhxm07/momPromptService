@@ -49,7 +49,7 @@ class TermCorrector:
         )
         self.pkeys = {c: self._pkey(c) for c in self.single}
         self.common = self._load_common(self.common_path)
-        logger.info("[TERMCORR] %d terms, %d aliases, %d common words",
+        logger.debug("[TERMCORR] %d terms, %d aliases, %d common words",
                     len(self.canon), len(self.alias_1) + len(self.alias_n), len(self.common))
 
     @staticmethod

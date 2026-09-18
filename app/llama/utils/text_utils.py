@@ -6,6 +6,39 @@ from llama.config import CHUNK_SIZE_CHARS
 logger = logging.getLogger(__name__)
 
 # =============================================================================
+# THE MODEL'S OWN NOTES
+# =============================================================================
+
+# The model talking about its answer rather than the meeting. All of these were printed in real
+# minutes (t4, 2026-09-18), as a Decision, an action or a figure: "Here are the action items extracted
+# from the meeting transcript:", "Note: The owners and due dates for these action items are not always
+# explicitly stated in the transcript, so some assumptions have been made", "Here are the figures
+# mentioned in the transcript.", "Note: Some of the points may be mentioned multiple times in the
+# conversation, but I have only listed each point once in the above summary."
+_NOTE_START = re.compile(
+    r"^\W*(here\s+(are|is)\b|here's\b|below\s+(are|is)\b|(sure|certainly|of\s+course)\s*[,!.]|"
+    r"(please\s+)?note\s*:|notes\s*:|n\.?\s?b\.?\s*:)", re.I)
+_NOTE_ANYWHERE = re.compile(
+    r"\b(extracted|mentioned|listed|identified|found|summari[sz]ed)\s+(from|in)\s+the\s+(meeting\s+)?"
+    r"(transcript|text|conversation|discussion\s+above)\b"
+    r"|\bassumptions\s+(have|had)\s+been\s+made\b"
+    r"|\bin\s+the\s+above\s+(summary|list)\b"
+    r"|\bi\s+(have|'ve)\s+(only\s+)?(listed|extracted|included|identified|summari[sz]ed|compiled)\b"
+    r"|\bnot\s+(always\s+)?explicitly\s+stated\s+in\s+the\s+transcript\b", re.I)
+
+
+def is_model_note(text: str) -> bool:
+    """True for a line that is the model talking about its answer, not something from the meeting."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _NOTE_START.search(t) or _NOTE_ANYWHERE.search(t):
+        return True
+    # A heading the model put over its own list: "Action items:", "Key figures from the meeting:".
+    return t.endswith(":") and len(t.split()) <= 8
+
+
+# =============================================================================
 # PREPROCESSING
 # =============================================================================
 

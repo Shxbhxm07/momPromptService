@@ -19,15 +19,17 @@ from typing import Dict, List, Tuple
 import agenda_items
 import document_checker
 import essence
+import figures_check
 import meeting_date
+import model_notes
 import minutes_state
 import prompt_leak
+import repository
 import template_details
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
 from docx_export import build_mom_docx, flatten_items
 from documents import extract_text_blocks
 from kafka_contract import KafkaJob, build_ack, summary_file_name, summary_object_key
-from minio_client import ObjectStore
 from mom import to_mom_response
 from setup import Clients
 
@@ -83,11 +85,28 @@ def _metadata(mom_meta: Dict) -> Dict[str, str]:
             if str(mom_meta.get(theirs) or "").strip()}
 
 
-def _read_documents(job: KafkaJob, store: ObjectStore) -> List[Tuple[str, str]]:
+def _read_documents(job: KafkaJob, c: Clients) -> List[Tuple[str, str]]:
+    """The text of every file in the job: a repository file from Elasticsearch, an attachment from MinIO.
+
+    The user's rule (2026-09-18): a file picked "From repository" is already indexed, so its text is read
+    from the repository index — it is not in MinIO at all; the backend sends mom/<conversation>/<file id>
+    for it, the path uploads use. A file added with "Attach file" is uploaded to MinIO and read from there.
+    The two are told apart by the file id (repository.is_repository_id). `file_fids` are repository ids.
+    """
     documents = []
     for i, path in enumerate(job.file_urls):
-        raw = store.download(path)
         name = (job.document_names[i] if i < len(job.document_names) else "") or path.rsplit("/", 1)[-1]
+        fid = repository.file_id(path)
+        if repository.is_repository_id(fid):
+            documents.append(_from_repository(job, c, i, fid, name))
+            continue
+        try:
+            raw = c.store.download(path)
+        except RuntimeError as e:
+            if "NoSuchKey" not in str(e):
+                raise
+            raise ValueError(f"The attached document {name!r} could not be found in file storage "
+                             f"({path}).") from e
         document_checker.check(raw, name)
         extraction = extract_text_blocks(raw, name)
         text = "\n\n".join(b for b in extraction.blocks if b.strip())
@@ -96,7 +115,27 @@ def _read_documents(job: KafkaJob, store: ObjectStore) -> List[Tuple[str, str]]:
         logger.info(f"[JOB {job.conversation_id}] read {name} "
                     f"({len(raw)/1048576:.1f} MB, {len(text)} chars)")
         documents.append((name, text))
+    for fid in job.file_fids:
+        documents.append(_from_repository(job, c, len(documents), fid, ""))
     return documents
+
+
+def _from_repository(job: KafkaJob, c: Clients, i: int, fid: str, name: str) -> Tuple[str, str]:
+    """(name, text) of repository document `fid` from the repository index, named after its real file.
+    Raises a ValueError the user can read when the index holds no text for it."""
+    found = repository.read(c.index.client, fid)
+    if not found:
+        raise ValueError(f"The document {name if name and name != fid else fid!r} was picked from the repository "
+                         f"but has no text in the repository index (file id {fid}). It may not be ingested yet.")
+    real_name, text = found
+    # The minutes are called "MoM-<file name>": the repository's name for it, not its id.
+    if real_name and (not name or name == fid):
+        names = job.document_names
+        names.extend([""] * (i + 1 - len(names)))
+        names[i] = real_name
+        name = real_name
+    logger.info(f"[JOB {job.conversation_id}] read {name or fid} from the repository ({len(text)} chars)")
+    return name or fid, text
 
 
 def process(job: KafkaJob, c: Clients) -> dict:
@@ -109,9 +148,9 @@ def process(job: KafkaJob, c: Clients) -> dict:
         if job.is_edit:
             import minutes_edit
             return minutes_edit.process(job, c)
-        if not job.prompt and not job.file_urls:
+        if not job.prompt and not job.file_urls and not job.file_fids:
             raise ValueError("Nothing to write minutes from: the job has no prompt and no file_urls.")
-        documents = _read_documents(job, c.store)
+        documents = _read_documents(job, c)
         chars = len(job.prompt) + sum(len(t) for _, t in documents)
         if chars < MIN_SOURCE_CHARS:
             raise ValueError(f"Too little to write minutes from: {chars} characters of prompt and document "
@@ -131,6 +170,22 @@ def process(job: KafkaJob, c: Clients) -> dict:
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
+
+        # The model's own preamble and footnotes, printed as business in a real run: "Decision. Here are
+        # the action items extracted from the meeting transcript:". See model_notes.
+        notes = model_notes.strip(mom)
+        if notes:
+            logger.info(f"[JOB {job.conversation_id}] dropped {len(notes)} line(s) that are the model's own "
+                        f"notes, e.g. {notes[0][:80]!r}")
+        # Numbers copied from the writer's own prompt examples ("$51,840", "7,30,340" in a New Zealand
+        # meeting), and rupee notation the source never used. See figures_check.
+        leaked, renotated = figures_check.check(mom, source)
+        if leaked:
+            logger.info(f"[JOB {job.conversation_id}] dropped {len(leaked)} line(s) carrying a number that is "
+                        f"only in the writer's prompt, e.g. {leaked[0][:80]!r}")
+        if renotated:
+            logger.info(f"[JOB {job.conversation_id}] {renotated} line(s) put back in the source's currency "
+                        "notation (no rupees in the source)")
 
         # With no meeting_date in mom_meta the title takes the writer's, and the writer has taken it
         # from another meeting — "approval of the February 17 2022 meeting minutes". Kept only when the

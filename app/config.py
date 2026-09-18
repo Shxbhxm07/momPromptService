@@ -48,6 +48,10 @@ ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD", "").strip()
 ELASTIC_INDEX_ATTACHED = os.getenv("ELASTIC_INDEX_ATTACHED", "mom-attached")
 ELASTIC_INDEX_INGESTED = os.getenv("ELASTIC_INDEX_INGESTED", "mom-ingested")
 ELASTIC_CREATE_INDICES = os.getenv("ELASTIC_CREATE_INDICES", "true").lower() == "true"
+# The platform's repository index: a file picked "From repository" is read from here, as the chunks the
+# platform ingested it into ({fId, text, pageNo, para, fileName}), when it is not in MinIO — see
+# repository.py. Read-only; never created here. Empty turns repository reading off.
+REPOSITORY_INDEX = os.getenv("REPOSITORY_INDEX", "teamsync_v1").strip()
 # Their doc-ingest chunk index (e.g. mom_v1). Never created here; see core/search_index.py.
 ENABLE_CHUNK_INDEX = os.getenv("ENABLE_CHUNK_INDEX", "false").lower() == "true"
 CHUNK_INDEX = os.getenv("CHUNK_INDEX", "").strip()

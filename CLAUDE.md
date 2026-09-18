@@ -50,7 +50,10 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
 | `app/minutes_state.py` | what a finished job leaves in MinIO so the next prompt can edit it: the minutes, the header, the ITEM grouping, and a history for undo |
 | `app/prompt_leak.py` | drops the user's own request when the writer minutes it as a decision or an action |
-| `app/essence.py` | **brevity**: one model call picks, BY INDEX, at most `ESSENCE_POINTS_PER_ITEM` (4) discussion points per ITEM to keep (Ch 6 para 10). Never writes text; decisions, actions and figures never cut; any doubt → full length. Dropped points leave `key_points` for real so state, search and edits match the Word file |
+| `app/essence.py` | **brevity**: small calls (≤80 points each, one per long ITEM) pick, BY INDEX, at most `ESSENCE_POINTS_PER_ITEM` (4) discussion points per ITEM to keep (Ch 6 para 10), answered as one plain ranked line of numbers, not JSON. Never writes text; decisions, actions and figures never cut; any doubt → full length. Dropped points leave `key_points` for real so state, search and edits match the Word file |
+| `app/model_notes.py` | drops the model's own preamble and footnotes printed as business ("Decision. Here are the action items extracted from the meeting transcript:", "Note: … some assumptions have been made"). Same test (`llama.utils.text_utils.is_model_note`) as the writer's `_bullets_to_list`, where they came from |
+| `app/figures_check.py` | drops a line carrying a number that is in the writer's PROMPTS but not in the source (the figures prompt's examples "$51,840", "7,30,340" were printed in a New Zealand meeting's minutes), and, when the source never mentions rupees, removes "(Rs …)" and lakh grouping. Spoken numbers count as present |
+| `app/repository.py` | **"From repository" files**: a file whose id is a repository id (24 hex, e.g. `6aad24087fb955220d1ad0cf`) is read from the platform's index (`REPOSITORY_INDEX`, `teamsync_v1`) — all chunks of that `fId` in pageNo/para order, overlaps removed, NOT routed. "Attach file" uploads (key ends in a UUID) are read from MinIO. `file_fids` are repository ids. Read-only |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
@@ -397,6 +400,74 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   printed in the ITEM's figures list, because figures are never cut. Showing the figures to the model stopped
   it spending picks on points that only repeat one. What fills the pages now: 22 "Decision." lines and 25
   figure lines — the non-decisions among them are the next fix.
+- **A 3-hour meeting broke both index steps — fixed 2026-09-18.** Cluster job on `t4` (a 3 h 7 min council
+  meeting, 206,907 chars, 15 chapters): the writer produced 765 key points; ITEM grouping's single reply hit
+  its 1,200-token limit and the length step's hit 800, both fell back safely, and the Word file was **57
+  pages, 759 points in one ITEM**. Both steps now work in fixed-size calls, so no reply grows with the meeting:
+  `agenda_items` sends points 80 at a time (`POINT_BATCH`) plus one call for decisions and figures, with each
+  reply budget sized to what it may list, in parallel (`LLM_CONCURRENCY`); a point the model leaves out goes to
+  its nearest earlier neighbour's ITEM (the writer's points follow the meeting) instead of the last ITEM.
+  `essence` makes one call per 80 points of each long ITEM, the cap split exactly across batches (`_shares`),
+  and asks for **one plain line of numbers, most important first** — under a strict JSON schema the local
+  host returned just `{`, and under JSON mode only whitespace to the token limit (the writer's documented
+  trap); a plain line came back in ~1 s with exactly the cap. Real run on the t4 minutes read back from the
+  .docx (local OpenRouter, Llama 3.3 70B): 11 ITEMs in 11 grouping calls (86 s, 62% placed by the model, the
+  rest by neighbour), **758 → 41 points in 10 s, 57 → 10 pages**. 23 offline tests with a fake writer that
+  lists everything, cuts replies off, or chats. Not fixed here: grouping still uses JSON (2 of 11 replies
+  were cut off, their points placed by neighbour); leftover decisions still go to the last ITEM.
+- **"From repository" files — read from Elasticsearch, 2026-09-18.** Picking a repository file on the IMIR screen
+  failed at once: `MinIO get failed for bucket='mom' key='317b0323-…/6aa7b5e57fb955220d1ad034': NoSuchKey`. The
+  backend sends such a file as `mom/<conversationId>/<file id>`, the upload path, but only uploads are copied
+  there; repository files sit in a per-user DMS bucket (`<user>dms//<fileId>`, per `doc_ingest.py`) and are
+  already ingested into the repository index as chunks `{fId, text, pageNo, para, fileName}`, ~120 words with a
+  30-word overlap. The user's call: read them from Elasticsearch (the rule below). A `file_fids` entry
+  goes straight there. `repository.read` sorts by pageNo/para, pages through with
+  search_after, and removes each overlap by exact word match (≥5 words), so a different chunking still
+  reassembles. The minutes are named after the chunks' `fileName` (`MoM-DRISHTI-4_…`). Missing in both, or a
+  wrong index name, is a sentence the user can read, not a stack trace. Tested on local Elasticsearch with the
+  backend's own `extract`/`chunk_pages`/`build_documents`/`bulk_index`: meeting.pdf (14 chunks) and t4.txt (417
+  chunks, also read 100 at a time) come back **word for word identical**, page by page; 11 tests.
+  **Confirmed on the cluster (Kibana):** repository files are in `teamsync_v1` — t1.docx is fId
+  `6aad24087fb955220d1ad0cf`, t2.docx `6aad24087fb955220d1ad0d0`, _id `<fId>_<page>_<para>`, `path` "T_" (a DMS
+  folder, not a MinIO key). **Their `_routing` is `<username>_<n>` (`sahil_imir.in_2`), NOT the fId**, so the
+  first version's `routing=fid` asked the wrong shard: on a 3-shard test index routed the same way it missed 3 of
+  3 files. The query is now unrouted. The DRISHTI file (`6aa7b5e5…d034`) is in no index — never ingested.
+  **The rule (the user's, same day): "From repository" → Elasticsearch, "Attach file" → MinIO**, told apart by
+  the id at the end of the `file_urls` key — a repository id is 24 hex (`6aad24087fb955220d1ad0cf`), an upload's
+  key ends in a UUID (`a404f703-84bd-4c13-a9c3-70b26d65e4e8`). A repository file is never looked for in MinIO
+  (it is not there) and an attachment never in Elasticsearch. A repository file with no chunks (DRISHTI) or an
+  attachment missing from MinIO each fail with a sentence the user can read. If the backend ever changes its id
+  format, `repository.is_repository_id` is the one place to change. 13 tests on a 3-shard, user-routed index.
+  Not done: `minio_client.split_object_path` keeps the leading "/" of a DMS key (`bucket//id` → key "/id"), so
+  a DMS path sent in file_urls would still miss; not needed while repository files come from Elasticsearch.
+- **The model's notes and its prompt's example figures printed as minutes — fixed 2026-09-18.** The t4 minutes
+  had "Decision. Here are the action items extracted from the meeting transcript:.", "Decision. Note: The owners
+  and due dates … some assumptions have been made", a figure "Here are the figures mentioned in the transcript."
+  and a point "Note: … I have only listed each point once". Cause: the four focused passes return bullet text
+  and `_bullets_to_list` kept every line. `is_model_note()` (text_utils) now skips openers ("Here are/is",
+  "Below is", "Sure,"), footers ("Note:", "N.B.:"), lines about the extraction ("extracted from the
+  transcript", "assumptions have been made", "I have only listed") and short headings ending in ":"; the same
+  test sweeps the finished minutes (`model_notes.py`). 9 real notes caught, 10 real lines kept (incl. "Notes
+  from the previous meeting…", "Sure Start funding…", content mentioning a transcript).
+  **The figures "$51,840 (Rs 51,840)", "$32,000", "7,30,340 (Rs 7,30,340)" were INVENTED** — none is in t4; they
+  are the examples in `FIGURES_EXTRACTION_PROMPT`, copied. The "Rs" came from a rule in four prompts that said
+  "Money is stated in Indian notation". Fixed in three layers: the rule now says keep the source's currency,
+  never add one in brackets (lakh guidance kept for rupee meetings); the figures prompt says its examples are
+  format only; and `figures_check.py` drops any line carrying a number found in the prompts (4+ digits, not a
+  year, not a power of ten — read from `llama.prompts` itself) that the source does not contain in digits or
+  words, and renotates rupee brackets / lakh grouping when the source has no rupees. On the real t4 minutes: the
+  3 invented figures and 5 notes dropped, every real figure kept ($800,000 … $635, 4.5%). 14 tests.
+- **Logs cut to what matters — 2026-09-18** (`app/logger_config.py`). The cluster log of the 15-minute `t4` job
+  was 536 lines, 450 of them noise: 127 readiness probes (`GET / 200`), 162 httpx `HTTP Request: POST`, 161
+  `[KeyPool] Using key #0`. Now: successful `GET /` and `GET /health` are filtered from uvicorn's access log
+  (a failing probe still shows), httpx is WARNING, the per-call and once-per-start lines (KeyPool, TERMCORR,
+  "Connecting to watsonx", IBM token refresh) are DEBUG, and `elastic_transport` is ERROR — its retry warnings
+  carried ~40-line tracebacks, three per request, while the job already logs an outage in one line.
+  `LOG_LEVEL=DEBUG` brings the per-call lines back (kafka/elasticsearch stay quiet). The formatter turns
+  `— → ✓ ✗ ↓ ↑` into `- -> OK x get put`, because the OCP viewer showed them as `â€” â†’ âœ“…` — done in the
+  formatter so the byte-identical copies (`minio_client.py`) are untouched. The grounding line now says
+  "quote too short to check" apart from "quote not in transcript" (it had called "since 1985" missing when it
+  was only under `_MIN_QUOTE_CHARS`), and the window pass prints progress every 20 windows. Same job: 537 → ~88.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

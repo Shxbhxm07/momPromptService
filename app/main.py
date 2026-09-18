@@ -100,7 +100,7 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="The body must be a JSON object, like a Kafka job.")
     job = parse_job(payload)
-    if not job.prompt and not job.file_urls:
+    if not job.prompt and not job.file_urls and not job.file_fids:
         return _answer(422, build_ack(
             job, success=False, description="No prompt and no file_urls: nothing to write minutes from."))
     try:
