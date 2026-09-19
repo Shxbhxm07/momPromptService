@@ -598,6 +598,18 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   rewritten; undo works; pre-`sources` minutes; an explicit `mode: edit`. The backend still has two optional fixes:
   a form for header details (sent as mom_meta — exact, classification as a dropdown) and the "null" it puts in
   front of our file name ("nullMoM-scanned-transcript-05min.docx").
+- **A real re-prompting session, fixed — 2026-09-20.** On the cluster: "add Col. Ariz Khan" worked, then (1) "update HIS
+  position to Team Leader of AI" changed Mr R K Gupta — each follow-up reached the model alone, so "his" had no
+  referent; (2) "revert the change to Gupta AND update Ariz Khan's position" did only the undo, the rest silently
+  dropped (undo was exclusive); (3) two messages failed: the model gave line 5 (Gupta) while quoting "Col" for Ariz
+  Khan on line 6. Now: the model is shown the last 5 requests and what each did, with OLD values ("Mr R K Gupta: role
+  Assistant Garrison Engineer (MES) → Team Leader of AI"), so pronouns resolve and an earlier change can be set back;
+  undo is applied first and the other changes after, on the restored minutes; a change goes to the ONE line its quote
+  names when the number disagrees (none, several, or a quote under 8 characters: refused); the prompt asks for the
+  name as the quote. And a new guard found by the replay: a role, owner or attendee name must be the user's own PHRASE
+  (or an earlier value being put back; an owner may be anyone on the attendee list) — word by word, "Garrison
+  Commander" had passed, built from two other roles. The session replayed with a stand-in making the real model's
+  mistakes: 11 checks pass; every earlier suite passes. Whether the real model now reads "his" right is for the cluster.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

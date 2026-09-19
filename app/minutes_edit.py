@@ -67,7 +67,7 @@ _SYSTEM = """You are given MINUTES already written from a meeting, and one INSTR
 
 Answer with a list of CHANGES. Never rewrite the minutes, never repeat unchanged lines.
 
-Every change names what it touches by its index in the list shown, and quotes the first words of that line so the change can be checked.
+Every change names what it touches by its index in the list shown (the number before the line; the first line is 0), and quotes that line so the change can be checked: copy its first words EXACTLY as shown, at least 8 characters — for an attendee, the name as shown (e.g. "Col. Ariz Khan").
 
 Operations:
 - set_meta   : fill or change a header field. field = venue | meeting_date | meeting_time | telephone | address | file_ref | issue_date | precedence | copy_no | classification | amendments_by | secretary_name | secretary_rank | distribution
@@ -81,7 +81,7 @@ Operations:
 - add        : add one new line at the end.  list + value (for action_items also owner and due)
 - set_owner  : set who owns an action and when it is due. list = action_items, index + quote + owner + due
 - set_role   : set an attendee's role.       list = attendees, index + quote + value (e.g. Chairman, Secretary)
-- undo       : undo the previous change to these minutes
+- undo       : undo the LAST change to these minutes (may come with other changes: they apply after it)
 - cannot     : the instruction cannot be done as a change; say why in value
 
 Rules:
@@ -91,6 +91,9 @@ Rules:
   CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED). A classification already set cannot be changed here;
   answer "cannot" if asked.
 - If the instruction asks for something that needs the original meeting document read again (for example "focus more on the budget"), answer "cannot".
+- EARLIER REQUESTS, when shown, are this user's previous messages and what each changed. Use them to understand
+  "him", "that", "the change you made": the person or line they point to. To revert an earlier change that is not
+  the last one, set the line back to the old value shown there.
 - Leave unused fields as "" and unused indexes as -1."""
 
 _SCHEMA = {
@@ -171,10 +174,20 @@ def _shown(mom: Dict[str, Any], meta: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str) -> Dict[str, Any]:
+def _earlier(state: Dict[str, Any], keep: int = 5) -> str:
+    """The user's previous requests on these minutes and what each did, oldest first — without them "update
+    his position" reached the model alone, and it changed the wrong person (seen 2026-09-20)."""
+    steps = [h for h in (state.get("history") or []) if isinstance(h, dict)] + [state]
+    lines = [f'- "{_flat(h.get("instruction"))[:160]}" → {"; ".join(h.get("changes") or []) or "nothing changed"}'
+             for h in steps if _flat(h.get("instruction"))]
+    return "\n".join(lines[-keep:])
+
+
+def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: str = "") -> Dict[str, Any]:
     from mom import _get_writer
+    before = f"EARLIER REQUESTS (oldest first):\n{earlier}\n\n" if earlier else ""
     reply = _get_writer().generate(
-        _SYSTEM, f"MINUTES:\n{_shown(mom, meta)}\n\nINSTRUCTION:\n{instruction}",
+        _SYSTEM, f"MINUTES:\n{_shown(mom, meta)}\n\n{before}INSTRUCTION:\n{instruction}",
         max_new_tokens=MAX_REPLY_TOKENS, temperature=0.0,
         extra={"response_format": {"type": "json_schema",
                                    "json_schema": {"name": "minute_changes", "schema": _SCHEMA,
@@ -292,12 +305,45 @@ def _quote_matches(quote: str, line: str) -> bool:
     return len(q) >= MIN_QUOTE and (q in l or l.startswith(q[:MIN_QUOTE]))
 
 
+def _plain(text: str) -> str:
+    return " " + " ".join(re.findall(r"[a-z0-9]+", _normalise(text))) + " "
+
+
+def _said(value: str, *sources: str) -> bool:
+    """Is `value`, as a whole phrase, in one of `sources`? For a short label — a role, an owner, a name —
+    each word being somewhere in the minutes proves nothing: "Garrison Commander" passed that way, built from
+    "Assistant Garrison Engineer" and "Station Commander" (caught by test, 2026-09-20)."""
+    v = _plain(value)
+    return v.strip() == "" or any(v in _plain(src) for src in sources)
+
+
+def _find_line(items: List[Any], idx: int, quote: str) -> Tuple[int, str]:
+    """(index, "") of the line a change is about, or (-1, why not).
+
+    The line at `idx` when the quote matches it. Otherwise the ONE line of the list the quote matches: the
+    model's number was one line off twice running on 2026-09-20 ("Col. Ariz Khan" quoted, line 5 — Gupta's —
+    given), and the quote is the part that says what the user meant. Several lines, none, or a quote too
+    short to tell apart are refused: a change never lands on a line nobody named (guard 1)."""
+    if 0 <= idx < len(items) and _quote_matches(quote, _line_of(items[idx])):
+        return idx, ""
+    if len(_normalise(quote)) < MIN_QUOTE:
+        return -1, f"the quote {quote!r} is too short to tell which line is meant"
+    hits = [i for i, v in enumerate(items) if _quote_matches(quote, _line_of(v))]
+    if len(hits) == 1:
+        logger.info(f"quote {quote[:40]!r} names line {hits[0]}, not {idx} — the quoted line is changed")
+        return hits[0], ""
+    return -1, "the quoted text matches no line" if not hits else "the quoted text matches several lines"
+
+
 def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any]],
-          instruction: str) -> Tuple[List[str], List[str], bool]:
-    """Change `mom` and `meta` in place. Returns (what was done, what was refused, undo asked)."""
+          instruction: str, earlier: str = "") -> Tuple[List[str], List[str], bool]:
+    """Change `mom` and `meta` in place. Returns (what was done, what was refused, undo asked).
+
+    `earlier` is the user's previous requests and what they changed (with old values), so a revert to a
+    value no longer in the minutes counts as the user's own words, not an invention."""
     done: List[str] = []
     refused: List[str] = []
-    allowed = _allowed_text(mom, meta, instruction)
+    allowed = _allowed_text(mom, meta, instruction) + " " + earlier
     undo = False
     # Deletions are collected and applied at the end: removing as we go would shift every later index.
     to_delete: Dict[str, set] = {name: set() for name in LISTS}
@@ -376,6 +422,13 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             if bad:
                 refused.append(f"new {name[:-1]}: mentions {', '.join(bad)}, which you did not give")
                 continue
+            people = " ; ".join(_flat(a.get("name")) for a in (mom.get("attendees") or []) if isinstance(a, dict))
+            if name == "attendees" and not _said(value, instruction, earlier):
+                refused.append(f"new attendee {value!r}: not a name you gave")
+                continue
+            if owner and not _said(owner, instruction, earlier, people):
+                refused.append(f"{owner!r}: not a name you gave or one at the meeting")
+                continue
             if name == "action_items":
                 items.append({"task": value, "assigned_to": owner, "assigned_by": "", "due": due})
             elif name == "attendees":
@@ -385,14 +438,12 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             done.append(f"added to {name}: {value[:60]}")
             continue
 
-        if not 0 <= idx < len(items):
-            refused.append(f"{op}: there is no {name} {idx}")
+        idx, why = _find_line(items, idx, quote)
+        if idx < 0:
+            refused.append(f"{op} {name}: {why}")
+            logger.info(f"{op} {name}: {why} — change skipped")
             continue
         line = _line_of(items[idx])
-        if not _quote_matches(quote, line):
-            refused.append(f"{op} {name} {idx}: the quoted text does not match that line")
-            logger.info(f"quote {quote[:40]!r} does not match {line[:60]!r} — change skipped")
-            continue
         if op == "delete":
             to_delete[name].add(idx)
             done.append(f"removed from {name}: {line[:60]}")
@@ -401,22 +452,36 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             if bad:
                 refused.append(f"{op} {name} {idx}: mentions {', '.join(bad)}, which you did not give")
                 continue
+            # A role, an owner or a person's name must be the user's own phrase (or an earlier value being
+            # put back); an owner may also be anyone already on the attendee list.
+            people = " ; ".join(_flat(a.get("name")) for a in (mom.get("attendees") or []) if isinstance(a, dict))
+            label = (value or owner) if op == "set_role" else value if (op == "replace" and name == "attendees") else ""
+            if label and not _said(label, instruction, earlier):
+                refused.append(f"{op} {name}: {label!r} is not what you wrote")
+                continue
+            if op == "set_owner" and owner and not _said(owner, instruction, earlier, people):
+                refused.append(f"set_owner: {owner!r} is not a name you gave or one at the meeting")
+                continue
             if op == "set_role":
                 entry = items[idx] if isinstance(items[idx], dict) else {"name": _flat(items[idx])}
+                was = _flat(entry.get("role")) or "none"
                 items[idx] = {**entry, "role": value or owner}
-                done.append(f"{_flat(items[idx].get('name'))} → {value or owner}")
+                done.append(f"{_flat(items[idx].get('name'))}: role {was} → {value or owner}")
             elif op == "set_owner" and isinstance(items[idx], dict):
+                was = _flat(items[idx].get("assigned_to")) or "none"
                 items[idx] = {**items[idx], "assigned_to": owner or items[idx].get("assigned_to", ""),
                               "due": due or items[idx].get("due", "")}
-                done.append(f"owner of {name} {idx} → {owner or '(unchanged)'}"
+                done.append(f"owner of '{_flat(items[idx].get('task'))[:50]}': {was} → {owner or '(unchanged)'}"
                             + (f", due {due}" if due else ""))
             elif op == "replace" and value:
                 if isinstance(items[idx], dict):
                     inner = "task" if "task" in items[idx] else "name"
+                    was = _flat(items[idx].get(inner))
                     items[idx] = {**items[idx], inner: value}
                 else:
+                    was = _flat(items[idx])
                     items[idx] = value
-                done.append(f"reworded {name} {idx}")
+                done.append(f"{name}: '{was[:60]}' → '{value[:60]}'")
             else:
                 refused.append(f"{op} {name} {idx}: nothing to change")
 
@@ -526,30 +591,39 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         before = copy.deepcopy(mom)
         history = list(state.get("history") or [])
 
-        data = _ask(mom, meta, instruction)
+        earlier = _earlier(state)
+        data = _ask(mom, meta, instruction, earlier)
         changes = data.get("changes") if isinstance(data.get("changes"), list) else []
         logger.info(f"{tag} edit: {len(changes)} change(s) proposed for {instruction[:70]!r}")
-        done, refused, undo = apply(mom, meta, changes, instruction)
-        if follow and not done and not undo and all(
-                isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
-            logger.info(f"{tag} not a change to the minutes ({refused[0] if refused else 'no change proposed'}) — "
-                        "writing them again from the document")
-            return None
-
+        # UNDO FIRST, THEN THE REST. "revert the change to Gupta and update Ariz Khan's position" used to do
+        # only the undo — the rest was silently dropped. The other changes are now applied to the restored
+        # version, each checked against it (a quote that no longer matches is refused and said so).
+        undo = any(isinstance(ch, dict) and ch.get("op") == "undo" for ch in changes)
         if undo:
             if not history:
                 raise ValueError("There is nothing to undo: these are the first minutes.")
             previous = history.pop()
             mom = copy.deepcopy(previous["mom"])
             meta = copy.deepcopy(previous.get("meta") or {})
-            done = ["undid the previous change"]         # exclusive: nothing else is applied with it
-        elif not done:
+            before = copy.deepcopy(mom)
+            changes = [ch for ch in changes if not (isinstance(ch, dict) and ch.get("op") == "undo")]
+        done, refused, _ = apply(mom, meta, changes, instruction, earlier)
+        if follow and not done and not undo and all(
+                isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
+            logger.info(f"{tag} not a change to the minutes ({refused[0] if refused else 'no change proposed'}) — "
+                        "writing them again from the document")
+            return None
+
+        if not done and not undo:
             reason = refused[0] if refused else "nothing in the minutes matched that instruction"
             raise ValueError(f"No change was made: {reason}.")
-        else:
-            groups = state["mom"].get("item_groups")
+        base = previous["mom"] if undo else state["mom"]
+        if done:
+            groups = base.get("item_groups")
             if isinstance(groups, list) and groups:
                 mom["item_groups"] = _regroup(groups, before, mom)
+        if undo:
+            done = ["undid the previous change"] + done
 
         # THE STATE IS SAVED LAST — it is what the next prompt edits, so it may change only once everything
         # that can fail has succeeded. Saved first (as until 2026-09-20), an Elasticsearch outage after it
