@@ -20,7 +20,8 @@ import kafka_consumer
 import logger_config
 import minutes
 import setup
-from config import ENABLE_KAFKA, HTTP_ACKS_TO_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC
+from config import (ENABLE_KAFKA, ENABLE_OCR, HTTP_ACKS_TO_KAFKA, JOB_KIND, KAFKA_ACK_TOPIC, KAFKA_JOB_TOPIC,
+                    MIN_PAGE_TEXT_CHARS, OCR_DPI, OCR_LANGS, OCR_MAX_PAGES)
 from kafka_contract import build_ack, parse_job
 from mom import MomGenerator
 
@@ -31,6 +32,31 @@ app = FastAPI(title="MoM from prompt",
               description="Minutes of Meeting in the JSSD format from a prompt and, optionally, a document.")
 
 
+def ocr_status() -> Dict[str, Any]:
+    """Which OCR reads scanned pages, with what settings, and whether it can — for /health and the log.
+
+    The settings come from env (config.py), so a typo is one console edit away. A language that is not
+    installed fails every scanned page with a TesseractError while typed PDFs keep working, which is easy
+    to miss; this names it the moment the pod starts, instead of on the first scanned upload.
+    """
+    status: Dict[str, Any] = {"engine": "tesseract", "enabled": ENABLE_OCR, "languages": OCR_LANGS,
+                              "dpi": OCR_DPI, "max_pages": OCR_MAX_PAGES,
+                              "scan_below_chars": MIN_PAGE_TEXT_CHARS}
+    try:
+        import pytesseract
+        status["version"] = str(pytesseract.get_tesseract_version()).split()[0]
+        installed = sorted(set(pytesseract.get_languages(config="")) - {"osd"})
+        status["installed"] = installed
+        missing = [lang for lang in OCR_LANGS.split("+") if lang not in installed]
+        status["ok"] = not missing
+        if missing:
+            status["problem"] = (f"OCR_LANGS={OCR_LANGS!r} names {', '.join(missing)}, which this image does "
+                                 f"not have; installed: {', '.join(installed)}. Every scanned page will fail.")
+    except Exception as e:
+        status.update(ok=False, problem=f"Tesseract is not usable in this image: {type(e).__name__}: {e}")
+    return status
+
+
 @app.on_event("startup")
 def _startup():
     if ENABLE_KAFKA:
@@ -38,6 +64,16 @@ def _startup():
     w = MomGenerator.describe()
     logger.info(f"✓ Ready | job={JOB_KIND} | kafka={'on' if ENABLE_KAFKA else 'off'} "
                 f"| minutes writer in process: {w['model']} at {w['url']}")
+    ocr = ocr_status()
+    if not ocr["enabled"]:
+        logger.warning("OCR is OFF (ENABLE_OCR=false): scanned pages are skipped, and a PDF that is only "
+                       "scans fails")
+    elif not ocr["ok"]:
+        logger.error(f"OCR: {ocr['problem']}")
+    else:
+        logger.info(f"OCR: Tesseract {ocr['version']}, languages {OCR_LANGS}, {OCR_DPI} dpi, up to "
+                    f"{OCR_MAX_PAGES} scanned pages per document, a page is a scan below "
+                    f"{MIN_PAGE_TEXT_CHARS} characters of its own text")
 
 
 @app.on_event("shutdown")
@@ -57,13 +93,17 @@ def root():
 @app.get("/health")
 def health():
     llm_ok = MomGenerator().is_ready()
+    ocr = ocr_status()
     return {
-        "status": "healthy" if llm_ok and (kafka_consumer.is_alive() or not ENABLE_KAFKA) else "degraded",
+        "status": "healthy" if llm_ok and (kafka_consumer.is_alive() or not ENABLE_KAFKA)
+                  and (ocr["ok"] or not ocr["enabled"]) else "degraded",
         # In process, so "configured" rather than "reachable": an endpoint and a credential are set.
         # A round-trip to the model on every probe would cost time and tokens; a job surfaces a bad one.
         "minutes_writer": {"in_process": True, **MomGenerator.describe(), "configured": llm_ok},
         "kafka": {"enabled": ENABLE_KAFKA, "consumer_running": kafka_consumer.is_alive(),
                   "jobs": KAFKA_JOB_TOPIC, "acks": KAFKA_ACK_TOPIC},
+        # Scanned pages only; a typed PDF, DOCX, DOC or TXT never goes near it.
+        "ocr": ocr,
     }
 
 

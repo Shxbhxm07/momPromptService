@@ -87,6 +87,24 @@ spec:
               value: "CHANGE_ME"
             - name: ELASTIC_PASSWORD
               value: "CHANGE_ME"
+            # ── OCR for scanned PDF pages: Tesseract, inside this pod ──
+            # Used only on a PDF page with no text of its own (a scan). Check what is in force at /health.
+            # "false" skips scanned pages; a PDF that is only scans then fails with a sentence saying so.
+            - name: ENABLE_OCR
+              value: "true"
+            # Languages, English FIRST: "hin+eng" loses the digit 1 ("16 Sep" read "6 Sep"). Installed: eng, hin.
+            # "eng+hin", "eng,hin" and "eng hin" all work. Only English: "eng".
+            - name: OCR_LANGS
+              value: "eng+hin"
+            # Resolution a scanned page is read at. Below 300, Hindi vowel signs drop out.
+            - name: OCR_DPI
+              value: "300"
+            # Most scanned pages read per document (about 1 s each); later scanned pages are skipped.
+            - name: OCR_MAX_PAGES
+              value: "200"
+            # A page with fewer characters of its own text than this is treated as a scan.
+            - name: MIN_PAGE_TEXT_CHARS
+              value: "40"
             # ── minutes writer (runs inside this pod) — IBM watsonx on IBM Cloud (us-south) ──
             # NOT Cloud Pak for Data: cpd-watsonx-imir.apps.ocp4.iaf.in does not resolve from this
             # cluster ("Name or service not known"). Set LLM_AUTH_MODE exactly ONCE — a second, empty
@@ -107,12 +125,21 @@ spec:
               value: ""
             - name: LLM_IS_REASONING
               value: "false"
+            # How much the model may read in ONE call. Up to this, the main read takes the whole transcript
+            # in one call; above it, the transcript is split into parts plus a merge call (a 3-hour meeting
+            # at 32768: 10 parts + 1 merge; at 65536: 1 call). IBM Cloud's Llama 3.3 70B takes 128k and
+            # this cluster has already made 48k-token calls. On CP4D, confirm its model's limit first.
             - name: MODEL_CONTEXT_LIMIT
-              value: "32768"
+              value: "65536"
             - name: LLM_CONCURRENCY
               value: "2"
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
+            # CHUNK SIZE: characters of transcript per window call. Decides most of a job's model calls:
+            # 6000 (~2 pages) = 12 calls for a 45-min meeting, 39 for 3 hours; 1800 (~half a page) = 27 and
+            # 153. Smaller catches more small details, at more calls. Minimum 800.
+            - name: MOM_WINDOW_CHARS
+              value: "6000"
             # At most this many discussion points per ITEM (JSSD Ch 6 para 10: only the essence).
             # Decisions, actions and figures are never cut. "0" keeps every point, as before.
             - name: ESSENCE_POINTS_PER_ITEM

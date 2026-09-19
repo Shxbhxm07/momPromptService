@@ -468,6 +468,36 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   formatter so the byte-identical copies (`minio_client.py`) are untouched. The grounding line now says
   "quote too short to check" apart from "quote not in transcript" (it had called "since 1985" missing when it
   was only under `_MIN_QUOTE_CHARS`), and the window pass prints progress every 20 windows. Same job: 537 → ~88.
+- **OCR reads English first — fixed 2026-09-19.** OCR was already built in (Tesseract 5.5.0 with `eng` + `hin`
+  in the image; a PDF page with under `MIN_PAGE_TEXT_CHARS` (40) characters of text is rendered at 300 dpi and
+  OCR'd). But `OCR_LANGS` was `hin+eng`, and Tesseract takes the first language as the main one: it lost the digit
+  1 — "16 Sep 26" → "6 Sep 26", "1030 hr" → "030 hr", "12 Corps" → "l2 Corps". Measured on drawn A4 scans, clean
+  and noisy (tilt, blur, speckle), through `extract_text_blocks` in the service image: `hin+eng` 9/13 numbers on
+  English, 6/8 on Hindi; **`eng+hin` 13/13 and 8/8, every word right on all four pages**, Hindi included. A
+  typed + scanned PDF reads as `pdf-mixed`. Only the default in `config.py` changed; `documents.py` stays
+  byte-identical. The audio service's `api/config.py` has the same `hin+eng` default.
+  **All OCR settings are in the Deployment's env since 2026-09-19** (they were always read from env, but
+  were not listed, so the OCP console did not show them): `ENABLE_OCR`, `OCR_LANGS`, `OCR_DPI`, `OCR_MAX_PAGES`,
+  `MIN_PAGE_TEXT_CHARS` — in `01-deployment.yaml`, `docker-compose.yml`, `.env.example` and the onboarding form.
+  `OCR_LANGS` accepts `eng,hin` / `eng hin` (joined with "+" in config.py: "hin,eng" reached Tesseract as one
+  language and failed every scan). A language not in the image (`hindi`) is logged as an ERROR at startup and
+  turns `/health` to degraded, with an `ocr` block showing engine, version, languages in force and installed.
+  Checked by starting the server with default, "eng, hin", "eng hin", "hindi", "eng" and ENABLE_OCR=false.
+- **Fewer model calls — 2026-09-19.** A job's calls were mostly windows (18 of 27 on a 45-minute meeting, 136 of
+  153 on a 3-hour one). Now: **windows of 6000 characters (~2 pages), not 1800** — the ONE setting, `MOM_WINDOW_CHARS`
+  ("chunk size", in the Deployment; "6,000" is read as 6000, junk falls back to 6000); the focused "list every point"
+  read runs only when windows are off (it repeated the windows' job over the whole transcript); the meeting-type
+  guess is gone (always "general", no call); `MODEL_CONTEXT_LIMIT` 32768 → **65536** in the YAML, so the main read
+  takes up to ~215k characters in one call instead of 20k-character parts + a merge. Counted with a recording fake:
+  45 min **27 → 12 calls** (66k → 47k tokens), 3 hours **153 → 39** (471k → 274k). The user asked for exactly one
+  knob — do not add back the per-step switches. Two fixes the bigger windows needed: the window reply allowance
+  grows with the window (1500 at ≤1800, capped 3000 — a 6000-char window returned up to 36 points, ~2000 tokens), and
+  a third, no-JSON-mode attempt for a broken window. The breakage (a reply that is one point then whitespace to the
+  token limit, in both JSON modes) is an OpenRouter-host quirk and random, not size-driven — 2 of 3 half-page windows
+  broke in one probe, 0 of 3 two-page ones — and never happened on watsonx (138/138 windows fine in the t4 cluster log).
+  Real-model accuracy, answer key of known facts/decisions/actions: 5-min 15/15 (1800) vs 15/15 (6000), 10-min 17/17
+  (6000); the rest of the comparison stopped when the OpenRouter credit ran out (HTTP 402). Before changing
+  MOM_WINDOW_CHARS again, re-measure on `scanned-transcripts/` (their exact text is in `printed-text/`).
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

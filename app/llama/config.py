@@ -141,6 +141,18 @@ MAX_NEW_TOKENS_CLASSIFY   = 512 if _IS_REASONING else 16
 # narrative-plus-fills behaviour.
 MOM_WINDOW_KEY_POINTS = os.getenv("MOM_WINDOW_KEY_POINTS", "true").lower() == "true"
 
+# THE CHUNK SIZE: how many characters of the transcript each window call reads. Windows are most of a
+# job's model calls, one each, so this is the setting that decides how many calls a job makes: at 6000
+# (about two pages) a 45-minute meeting takes 12 calls and a 3-hour one 39; at the old 1800 (half a
+# page) 27 and 153. Smaller finds more small facts at more calls; much bigger and a window starts to
+# summarise instead of listing. The quote check is the same at any size. Below 800 is not accepted.
+# Typed in the OCP console, so "6,000" is read as 6000, and anything unreadable falls back to 6000 —
+# a bad value must not stop the pod from starting.
+try:
+    MOM_WINDOW_CHARS = max(800, int(os.getenv("MOM_WINDOW_CHARS", "6000").replace(",", "").strip()))
+except ValueError:
+    MOM_WINDOW_CHARS = 6000
+
 # Ask the model which extracted entries describe the same work, then merge them in code. Lexical dedupe
 # cannot see that "revise and re-record the LEP course" and "the revised script will be recorded
 # tomorrow" are one task — measured 2026-09-11, LEP carried 19 action items for 12 real ones.

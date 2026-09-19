@@ -1,6 +1,7 @@
 """Settings, all from the environment. Where a setting is shared with the audio service, the name and
 the default are the same as in ~/offline-mom-api/api/config.py, so one set of cluster values serves both."""
 import os
+import re
 
 # ── the minutes writer ─────────────────────────────────────────────────────────
 # The writer runs in this process (the `llama` package); its endpoint, model, credentials and budgets
@@ -23,10 +24,27 @@ MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "300000"))
 MAX_DOC_MB = int(os.getenv("MAX_DOC_MB", "50"))
 
 # ── reading documents (utils/documents.py) ─────────────────────────────────────
+# OCR is Tesseract (the tesseract-ocr package in the image, with English and Hindi data), run in this
+# pod. It reads only the PDF pages that have no text of their own — a scan — so a typed PDF never
+# touches it. Every setting below can be changed in the Deployment's env; /health shows what is in force.
+# Off: a scanned page is skipped, and a PDF that is nothing but scans fails with a sentence saying so.
 ENABLE_OCR = os.getenv("ENABLE_OCR", "true").lower() == "true"
+# A page with fewer characters of its own text than this is treated as a scan. Not 0: a scanner often
+# stamps a line (a date, a page number) onto an otherwise image-only page.
 MIN_PAGE_TEXT_CHARS = int(os.getenv("MIN_PAGE_TEXT_CHARS", "40"))
+# The resolution a scanned page is rendered at before it is read. Below 300, Hindi vowel signs start to
+# drop out; above it, each page takes longer for no measured gain.
 OCR_DPI = int(os.getenv("OCR_DPI", "300"))
-OCR_LANGS = os.getenv("OCR_LANGS", "hin+eng")
+# ENGLISH FIRST. Tesseract treats the first language as the main one, and with "hin+eng" it lost the
+# digit 1 on scanned pages — "16 Sep 26" read "6 Sep 26", "1030 hr" read "030 hr", "12 Corps" read
+# "l2 Corps": 9 of 13 numbers right on an English scan, 6 of 8 on a Hindi one. "eng+hin" read every
+# word and number on both, clean and noisy scans alike (measured 2026-09-19, tesseract 5.5.0).
+# Tesseract wants the codes joined by "+"; "eng, hin" or "eng hin" typed into the console is joined
+# here, since "hin,eng" reaches Tesseract as one language that does not exist and every scan fails.
+# Only languages installed in the image work (eng, hin) — /health and the startup log say if not.
+OCR_LANGS = "+".join(p for p in re.split(r"[\s,;+]+", os.getenv("OCR_LANGS", "eng+hin")) if p) or "eng+hin"
+# The most scanned pages read per document, at about a second each. Later scanned pages are skipped
+# with a warning in the log; typed pages are always read.
 OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "200"))
 SOFFICE_TIMEOUT = int(os.getenv("SOFFICE_TIMEOUT", "180"))
 

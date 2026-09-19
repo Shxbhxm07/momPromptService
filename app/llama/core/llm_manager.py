@@ -13,7 +13,7 @@ from llama.config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOK
                     MODEL_CONTEXT_LIMIT_LONG, LLM_PROVIDER_ORDER, WATSONX_PROJECT_ID,
                     WATSONX_VERSION, IBM_IAM_URL, LLM_AUTH_MODE, LLM_VERIFY_SSL,
                     CP4D_AUTH_URL, CP4D_USERNAME, CP4D_API_KEY, CP4D_TOKEN_TTL, MOM_WINDOW_KEY_POINTS, WINDOW_CONCURRENCY,
-                    LLM_CONCURRENCY)
+                    LLM_CONCURRENCY, MOM_WINDOW_CHARS)
 from llama.core.key_pool import load_pool_from_env
 from llama.core.translation_validator import validate_translation
 from llama.prompts import MEETING_ANALYSIS_PROMPT, SYNTHESIS_PROMPT, MEETING_ANALYSIS_PROMPT_JSON, SYNTHESIS_PROMPT_JSON, SPEAKER_MAPPING_PROMPT, DECISIONS_EXTRACTION_PROMPT, KEY_POINTS_EXTRACTION_PROMPT, WINDOW_EXTRACTION_PROMPT, SUMMARY_FROM_POINTS_PROMPT, FIGURES_EXTRACTION_PROMPT, TRANSCRIPT_CORRECTION_PROMPT, ITEMS_MERGE_PROMPT, DECISIONS_VERIFY_PROMPT, TRANSLATED_TRANSCRIPT_CORRECTION_PROMPT, ACTION_ITEMS_EXTRACTION_PROMPT, MEETING_TYPE_CLASSIFY_PROMPT, TEMPLATE_FOCUS
@@ -908,7 +908,11 @@ class LLMManager:
                      "assigned_by": "", "due": (p.get("due") or "").strip()})
             content["key_points"] = window_points
 
-        content = self._fill_key_points_json(content, text, temperature, route)
+        # The focused points read sends the whole transcript once more to list the discussion points —
+        # the job the windows just did — so it runs only when the windows are off (since 2026-09-19:
+        # one call and one whole-transcript read fewer per job; essence.py keeps a few points per ITEM).
+        if not MOM_WINDOW_KEY_POINTS:
+            content = self._fill_key_points_json(content, text, temperature, route)
         content = self._fill_decisions_json(content, text, temperature, route)
         content = self._fill_action_items_json(content, text, temperature, route)
         content = self._fill_figures_json(content, text, temperature, route)
@@ -990,9 +994,12 @@ class LLMManager:
 
     def _focus_for(self, text: str):
         """(meeting_type, focus_text) for the auto-detected type — focus is appended to the system
-        prompt so the SAME schema/layout is emphasised for that meeting type."""
-        mtype = self.classify_meeting_type(text)
-        return mtype, TEMPLATE_FOCUS.get(mtype, "")
+        prompt so the SAME schema/layout is emphasised for that meeting type.
+
+        Always "general", with no model call, since 2026-09-19. The guess picked between sales, standup,
+        one_on_one and general — types built for office meetings — at one call per job; military minutes
+        are "general", which adds no emphasis at all."""
+        return "general", TEMPLATE_FOCUS.get("general", "")
 
     def _generate_json_raw(self, text, temperature, estimated_tokens, strict=False, focus="", route=None):
         """Run the JSON-emitting prompts (single-pass or chunk+synthesise). Returns (raw_json, chunks).
@@ -1373,9 +1380,20 @@ class LLMManager:
         return [it for it, _ in kept]
 
     # ── High-recall, quote-grounded extraction ───────────────────────────────
-    # Windows overlap so a point straddling a boundary is seen whole at least once.
-    _WINDOW_CHARS = 1800
+    # Windows overlap so a point straddling a boundary is seen whole at least once. The size is the
+    # chunk size in env (MOM_WINDOW_CHARS, default 6000 — about two pages; it was 1800 until 2026-09-19).
+    _WINDOW_CHARS = MOM_WINDOW_CHARS
     _WINDOW_OVERLAP = 350
+    # The reply allowance grows with the window. A point comes back as ~60-90 tokens of JSON (text,
+    # quote, type, owner, due); half a page holds 3-6 of them, two pages 15-20, and a fixed 1500 would
+    # cut a big window's list off mid-way — its JSON then fails to parse and the retry loses the tail.
+    # Exactly MAX_NEW_TOKENS_EXTRACTION at 1800 or less. It is a cap, not a target: the model stops when
+    # its list ends.
+    # Capped at 3000: measured 2026-09-19, a 6000-character window of a busy meeting returned at most 36
+    # points in ~2000 tokens, and a reply stuck emitting whitespace (below) burns the whole allowance —
+    # ~100 s at 4000 — before its retry.
+    _WINDOW_REPLY_TOKENS = max(MAX_NEW_TOKENS_EXTRACTION,
+                               min(3000, -(-MAX_NEW_TOKENS_EXTRACTION * MOM_WINDOW_CHARS // 1800)))
     # A quote shorter than this proves nothing — "the" appears in every transcript. 14, not 18:
     # at 18 the gate rejected "passes unanimously" (17 chars) and "I will adjourn at 209" (17),
     # both real quotes of the two facts that keep going missing from the end of a meeting. The
@@ -1542,19 +1560,25 @@ class LLMManager:
             # because silent partial coverage is the worst outcome here.
             schema = {"response_format": {"type": "json_schema", "json_schema": {
                 "name": "points", "strict": True, "schema": self._POINT_SCHEMA}}}
-            for attempt, extra in ((1, schema), (2, self._WINDOW_FALLBACK_FORMAT)):
+            # A THIRD attempt, with no response_format at all, after both JSON modes failed. Measured
+            # 2026-09-19 on OpenRouter: json_object mode also filled a reply with whitespace to its limit,
+            # twice running on the same window, and the slice was lost. With no format the model answers
+            # in prose around complete objects, which _parse_points already reads. Only a window that
+            # failed twice gets here. (Never seen on watsonx: 138 of 138 windows parsed first time.)
+            for attempt, extra in ((1, schema), (2, self._WINDOW_FALLBACK_FORMAT), (3, None)):
                 try:
                     out = self.generate(
                         WINDOW_EXTRACTION_PROMPT,
                         f"SECTION {i+1} OF {len(wins)}:\n─────\n{w}\n─────\n\nExtract every point.",
-                        MAX_NEW_TOKENS_EXTRACTION, temperature,
+                        self._WINDOW_REPLY_TOKENS, temperature,
                         model=route.get("model"), api_base=route.get("api_base"),
                         extra=extra,
                     )
                     return self._parse_points(out, i, len(wins))
                 except Exception as e:
-                    if attempt == 1:
-                        logger.warning(f"[MOM] window {i+1}/{len(wins)} failed ({e!r}) — retrying without the JSON schema")
+                    if attempt < 3:
+                        logger.warning(f"[MOM] window {i+1}/{len(wins)} failed ({e!r}) — retrying "
+                                       + ("without the JSON schema" if attempt == 1 else "with no JSON mode"))
                     else:
                         logger.error(f"[MOM] window {i+1}/{len(wins)} LOST after retry ({e!r}) — "
                                      f"~{len(w)} chars of this meeting are not represented")
