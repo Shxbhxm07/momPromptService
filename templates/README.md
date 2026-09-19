@@ -117,6 +117,40 @@ Use `MoM_Specimen_Full.docx` as the reference.
 - [ ] No placeholder text such as `by None stated`, `by TBD`, `by N/A`
 - [ ] The prompt's instructions are followed but **not copied into** the minutes
 
+## The minutes template — change the layout in Word (since 2026-09-20)
+
+The minutes are filled into a Word **fill-in template**, the same kind as the service-letter template:
+the layout lives in the .docx, and every value is a named slot. The default is
+**`app/templates/jssd_minutes.docx`** (JSSD Appendix AD, all 38 layout rules pass on it).
+
+**To customise:** open that file in Word, change anything — wording, fonts, spacing, fixed lines, your
+unit's address typed in directly — keep the `{{ … }}` and `{%p … %}` / `{%tr … %}` tags you still want,
+save, and attach it to the job as its template (`template_url`, e.g. from IMIR's template list). That
+template is then filled instead of the default, and edits keep using it.
+
+**Every slot gets a value from the transcript, the job or a re-prompt — or `xxx...xxx`.** A slot the
+service does not know (a typo, a new idea) also prints `xxx...xxx`, so nothing vanishes silently. A
+template that cannot be filled (a broken tag) falls back to the default layout; the job still succeeds.
+
+| slot | what |
+|---|---|
+| `{{ telephone }}` `{{ precedence }}` `{{ copy_no }}` | superscription (precedence and copy number are blank when not given — the manual uses them only when they apply) |
+| `{%p for line in address %}{{ line }}{%p endfor %}` | the originator's address, one line each |
+| `{{ file_reference }}` `{{ date_of_issue }}` | file reference, and the date after "dt" |
+| `{{ title }}` | the whole centre heading: MINUTES OF THE MEETING HELD AT … AT … HR ON … TO DISCUSS … |
+| `{{ meeting_title }}` `{{ venue }}` `{{ meeting_date }}` `{{ meeting_time }}` | the heading's parts, for your own wording |
+| `{{ present_number }}`, `attendees[ number, name, appointment, label ]` | "1. The following were present:-" and its rows (`{%tr for a in attendees %}`) |
+| `introduction[ number, text, subs[ number, text ] ]` | purpose, "The following agenda was taken up:-" with the agenda, summary |
+| `items[ roman, title, classification, entries[ number, text, decision, action, info, figures[ number, text ] ] ]` | ITEM I, II, III with the Action and Info columns |
+| `{{ closing_number }}` `{{ amendments_by }}` | the "Agreement with the minutes …" paragraph |
+| `{{ secretary_name }}` `{{ secretary_rank }}` | signature block |
+| `distribution[ addressee, copies, copy_no, remarks ]` | distribution table; File is always the last row |
+| `{{ classification }}` `{{ page_count_text }}` `{{ draft }}` | head and foot of every page; "(Five pages)" on page 1 for CONFIDENTIAL and above |
+| `{{ purpose }}` `{{ summary }}` `{{ chairman }}`, lists `agenda` `key_points` `key_figures` `decisions`, `action_items[ task, owner, due ]` | the raw values, for a layout different from Appendix AD |
+
+Rebuild the default after changing its generator: `tools/make_minutes_template.py` (it uses the renderer's
+own measurements, so a hand edit in Word and a regenerated file both work).
+
 ## Testing the template feature
 
 The template supplies **only the issuing HQ's standing details** — address, telephone, file reference,

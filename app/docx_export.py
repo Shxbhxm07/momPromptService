@@ -744,13 +744,33 @@ def _headers(doc, grade: str, copy_no: str, pages: int):
     _watermark(rest, mark, 2)
 
 
-def build_mom_docx(mom: Dict[str, Any], meta: Dict[str, Any] = None) -> bytes:
+def build_mom_docx(mom: Dict[str, Any], meta: Dict[str, Any] = None, template: bytes = None) -> bytes:
     """MoM response object, plus the job's optional `mom_meta`, → a JSSD-format .docx, ready to upload.
+
+    FROM A TEMPLATE since 2026-09-20 (minutes_template): the job's own fill-in template when it sent one,
+    otherwise templates/jssd_minutes.docx — the layout in a Word file anyone can edit, every value a slot.
+    A job's template that cannot be filled falls back to the default one, and a default that cannot be
+    filled to the code below, which builds the same layout directly: the minutes are never lost to a
+    template problem."""
+    meta = meta if isinstance(meta, dict) else {}
+    import minutes_template
+    for tpl, what in ((template, "the job's template"), (None, "the default template")):
+        if tpl is None and what == "the job's template":
+            continue
+        try:
+            return minutes_template.render(mom, meta, tpl)
+        except Exception as e:
+            logger.error(f"[DOCX] {what} could not be filled ({type(e).__name__}: {e})")
+    logger.error("[DOCX] building the minutes without a template")
+    return _build_direct(mom, meta)
+
+
+def _build_direct(mom: Dict[str, Any], meta: Dict[str, Any]) -> bytes:
+    """The same layout built in code — the fallback when no template can be filled.
 
     Page 1 of CONFIDENTIAL and higher minutes states the number of pages. That is a Word field, which
     Word recalculates on opening, but other viewers show the number stored with it — so the stored
     number is the count LibreOffice lays out, falling back to an estimate."""
-    meta = meta if isinstance(meta, dict) else {}
     data, shown = _build(mom, meta)
     if _grade(meta.get("classification")) in _PAGES_SHOWN:
         laid_out = _laid_out_pages(data)

@@ -304,8 +304,10 @@ def merge(job_meta: Dict[str, Any], template: Dict[str, Any]) -> Tuple[Dict[str,
 @dataclass
 class TemplateResult:
     name: str = ""
-    status: str = "none"          # none | used | not_jssd | unreadable | no_details | specimen | failed
+    status: str = "none"          # none | fillable | used | not_jssd | unreadable | no_details | specimen | failed
     reason: str = ""
+    # A template WITH SLOTS ({{ … }}): the whole Word file, filled in place of the default one.
+    fillable: Optional[bytes] = None
     details: Dict[str, Any] = field(default_factory=dict)
     dropped: List[str] = field(default_factory=list)
 
@@ -331,6 +333,14 @@ def load(job, store) -> TemplateResult:
         import document_checker
         from documents import extract_text_blocks
         document_checker.check(raw, name)          # type and size, as for any attachment
+        # A FILL-IN TEMPLATE — a Word file with {{ slots }}, like templates/jssd_minutes.docx — is the
+        # layout itself: it is filled with the minutes in place of the default one, and nothing is
+        # extracted from it. Every slot the job cannot fill prints "xxx...xxx".
+        import minutes_template
+        if minutes_template.is_fillable(raw):
+            res.status, res.fillable = "fillable", raw
+            logger.info(f"{tag} a fill-in template: the minutes are laid out by it")
+            return res
         text = "\n".join(b for b in extract_text_blocks(raw, name).blocks if b.strip())
     except Exception as e:
         res.status, res.reason = "unreadable", f"{type(e).__name__}: {e}"

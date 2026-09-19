@@ -54,6 +54,8 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/model_notes.py` | drops the model's own preamble and footnotes printed as business ("Decision. Here are the action items extracted from the meeting transcript:", "Note: … some assumptions have been made"). Same test (`llama.utils.text_utils.is_model_note`) as the writer's `_bullets_to_list`, where they came from |
 | `app/figures_check.py` | drops a line carrying a number that is in the writer's PROMPTS but not in the source (the figures prompt's examples "$51,840", "7,30,340" were printed in a New Zealand meeting's minutes), and, when the source never mentions rupees, removes "(Rs …)" and lakh grouping. Spoken numbers count as present |
 | `app/repository.py` | **"From repository" files**: a file whose id is a repository id (24 hex, e.g. `6aad24087fb955220d1ad0cf`) is read from the platform's index (`REPOSITORY_INDEX`, `teamsync_v1`) — all chunks of that `fId` in pageNo/para order, overlaps removed, NOT routed. "Attach file" uploads (key ends in a UUID) are read from MinIO. `file_fids` are repository ids. Read-only |
+| `app/minutes_template.py` | **fills the minutes TEMPLATE** (docxtpl): builds every slot's value from the minutes and the job — `xxx...xxx` when absent, also for a slot it does not know (`_Missing`) — fills the job's own fill-in template or the default, then the page count (two passes, LibreOffice) and the watermark. See *Templates* |
+| `app/templates/jssd_minutes.docx` | **the default minutes template**: JSSD Appendix AD as a Word file with `{{ slots }}`, editable in Word. Built by `tools/make_minutes_template.py` from `docx_export`'s building blocks; 38 layout rules pass on it |
 | `app/tidy_minutes.py` | code only, no model call, **never removes a fact**: a decision an action item already records is merged into it only when the kept line holds every number, name and all but one word of the other; owners written as the attendee list has them ("Rohit" → "Maj Rohit Negi", unique match only); after essence, a figure is dropped only when ONE printed point or decision holds all its numbers and every specific word of its label. No cap |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
@@ -118,7 +120,23 @@ again and the usual direction resumes:
 cp app/docx_export.py ~/offline-mom-api/api/utils/docx_export.py     # then commit in that repo too
 ```
 
-## Templates — what they contribute, and why only that (decided 2026-09-15)
+## Templates
+
+**Since 2026-09-20 the minutes ARE a template.** The user gave a docxtpl service-letter template as the
+model ("make our template like that … everything customisable; the value from the transcript, otherwise
+xxx...xxx"). `docx_export.build_mom_docx` now fills `app/templates/jssd_minutes.docx` (via
+`minutes_template.render`); a job whose `template_url` is a Word file WITH slots (`{{ … }}`/`{% … %}`,
+`template_status: fillable`) is filled instead, and edits re-fetch it (its URL is in the state). A template
+that cannot be filled falls back to the default, and the default to `docx_export._build_direct` — the old
+code-built layout — so no job loses its minutes to a template. Filled from the default, the 38-rule check
+passes; compared page by page with the code-built minutes, the text differs ONLY where the user's rule adds
+`xxx...xxx` (an unstated appointment, purpose or agenda; Action and Info against a decision nobody owns).
+14 tests with a client's own template (its wording kept, values filled, an unknown slot → xxx...xxx, an edit
+keeps the layout, a broken template → the default, the service-letter template itself fills). Templates
+WITHOUT slots are still read as below. The 2026-09-15 decision below rejected "tagged {{placeholders}}"
+only because official templates had none; a fill-in template is now the user's own choice.
+
+### Templates without slots — what they contribute, and why only that (decided 2026-09-15)
 
 A JSSD template (Appendix AD) holds: **layout** fixed by the manual (already in `docx_export.py`), **specimen
 placeholders** ("Telephone number here", "FIRING PRACTICE", dotted lines), and the **issuing HQ's standing

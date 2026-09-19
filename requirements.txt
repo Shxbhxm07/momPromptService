@@ -20,3 +20,7 @@ kafka-python==2.0.2
 # The minutes writer (app/llama) calls the LLM with httpx. Pinned to the version it ran on as a
 # separate service, so merging it in changes nothing about how it talks to the model.
 httpx==0.28.1
+# The minutes are filled into a Word TEMPLATE (app/minutes_template.py): the layout in a .docx anyone can
+# edit, every value a {{ slot }} — the engine of the service-letter template the user gave as the model.
+docxtpl==0.20.2
+Jinja2==3.1.6

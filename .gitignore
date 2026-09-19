@@ -25,6 +25,9 @@ out/
 !samples/*.txt
 # templates/ is the test pack handed to the testing team: the specimen minutes are deliverables.
 !templates/*.docx
+# The minutes are filled into this template (app/minutes_template.py): without it in the image every job
+# falls back to the code-built layout, silently.
+!app/templates/*.docx
 
 # ── editor / OS ──────────────────────────────────────────────────────────────
 # LibreOffice / Microsoft Office lock files, created while a document is open.

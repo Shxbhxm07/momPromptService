@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import minutes_state
 from docx_export import build_mom_docx, flatten_items
@@ -50,8 +50,6 @@ MAX_REPLY_TOKENS = 2000
 SNIPPET = 160                 # how much of each line the model is shown; enough to recognise it
 MIN_QUOTE = 8                 # a shorter quote proves nothing about which line was meant
 
-# Header fields a chat instruction may change. Classification, precedence and copy number are NOT
-# here, by guard 3; neither is the distribution list, which comes from the HQ's template.
 # Every header detail the minutes print — each shows "xxx...xxx" until someone provides it, and the user may
 # provide any of them in a later prompt, in any wording (the user's rule, 2026-09-20). Classification only
 # under guard 3.
@@ -443,6 +441,24 @@ def _file_name(state: Dict[str, Any], job: KafkaJob, mom: Dict[str, Any]) -> str
     return stored.group(1) if stored else summary_file_name(job, mom.get("title") or "")
 
 
+def _fillable_template(state: Dict[str, Any], c: Clients, tag: str) -> Optional[bytes]:
+    """The job's fill-in template, fetched again, so the edited minutes keep the layout they had. The
+    default template when there was none, or it can no longer be read (logged, never fatal)."""
+    url = ((state.get("template") or {}).get("url") or "").strip()
+    if not url:
+        return None
+    try:
+        import minutes_template
+        raw = c.store.download(url)
+        if minutes_template.is_fillable(raw):
+            return raw
+        logger.warning(f"{tag} the template at {url!r} no longer has slots — the default layout is used")
+    except Exception as e:
+        logger.warning(f"{tag} the template at {url!r} could not be read ({type(e).__name__}) — the default "
+                       "layout is used")
+    return None
+
+
 def process(job: KafkaJob, c: Clients) -> dict:
     """An edit job → an acknowledgement, exactly like a normal job. Never raises."""
     t0 = time.time()
@@ -488,7 +504,7 @@ def process(job: KafkaJob, c: Clients) -> dict:
         # they were — the new .docx sits unused under its own hash — and sending the change again is safe.
         # Same order as a new job (minutes.process): file, search record, state; the chunk copy, which
         # never raises, after.
-        docx_bytes = build_mom_docx(mom, meta)
+        docx_bytes = build_mom_docx(mom, meta, template=_fillable_template(state, c, tag))
         bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest(),
                                                         name=_file_name(state, job, mom)),
                                      docx_bytes, DOCX_MIME)

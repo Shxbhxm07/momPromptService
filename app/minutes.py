@@ -230,7 +230,8 @@ def process(job: KafkaJob, c: Clients) -> dict:
         points, figures, decisions = flatten_items(mom)
         tidy_minutes.trim_figures(mom, points, decisions, figures, mom.get("item_groups"))
 
-        docx_bytes = build_mom_docx(mom, meta)
+        # Laid out by the job's own fill-in template when it sent one, otherwise by the default template.
+        docx_bytes = build_mom_docx(mom, meta, template=template.fillable)
         # Downloaded as "MoM-<the user's file name>.docx", not as its hash — see summary_object_key.
         bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest(),
                                                         name=summary_file_name(job, mom.get("title") or "")),
@@ -244,9 +245,11 @@ def process(job: KafkaJob, c: Clients) -> dict:
         # What a later prompt needs to EDIT these minutes rather than write them again: the minutes
         # themselves, the header this job assembled, and the ITEM grouping. Never fatal — see
         # minutes_state. Only after the file is stored, so the state can never point at nothing.
+        # A fill-in template's location goes with the state, so an edit lays the minutes out the same way.
         minutes_state.save(job, c.store, mom=mom, meta=meta, object_key=key, bucket=bucket,
                            template={"name": template.name, "status": template.status,
-                                     "fields": from_template})
+                                     "fields": from_template,
+                                     "url": job.template_url if template.fillable else ""})
         if job.template_url:
             logger.info(f"[JOB {job.conversation_id}] template {template.name!r}: {template.status}"
                         + (f", used {from_template}" if from_template else "")
