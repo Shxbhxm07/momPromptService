@@ -62,7 +62,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
 | `app/es_client.py` | copied from `api/core/search_index.py`, minutes only (translation index removed) |
 | `app/docx_export.py` | **the JSSD renderer**, copied **unchanged** from `api/utils/docx_export.py` |
-| `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, copied **unchanged** from `api/utils/documents.py` |
+| `app/documents.py` | PDF/DOCX/DOC/TXT text extraction with OCR, from `api/utils/documents.py` — **diverged 2026-09-20** (form flattening, turned scans); copy it back there |
 | `Dockerfile`, `requirements.txt` | at the repo root, beside `app/` |
 | `app/llama/` | **the minutes writer, a package inside the service** — what used to be llama-service. Called in process by `app/mom.py`: no HTTP, no second pod. See below |
 | `deploy/openshift/01-deployment.yaml` … `03-route.yaml` | **the deployment, in apply order** — the ONE Deployment, its Service, the Route (3600 s timeout). Every setting a plain env value, **no Secret object** (the user's choice); credentials are `CHANGE_ME` in the repo |
@@ -161,8 +161,15 @@ its target by INDEX and quoting the line it means. Code applies them. **Four gua
 1. **Wrong line** — a quote that does not match the line at that index is dropped, so "point 41" cannot hit 42.
 2. **Invented detail** — names and numbers in new text must already be in the instruction, the minutes or the
    header ("31 Dec 2027" is refused when the user said "30 Sep"). Months are matched Sep/September either way.
-3. **Classification and precedence are never editable from chat text** (`EDITABLE_META`), so a misread
-   "remove the secret part" cannot declassify a document. Same rule as templates.
+3. **A classification is never CHANGED from chat text**, so a misread "remove the secret part" cannot
+   declassify a document. One the job never gave ("xxx...xxx") may be FILLED — only with the one grade word
+   the user wrote ("mark it restricted"; "top secret" is never read as "secret"). Every other header detail
+   is fillable (`EDITABLE_META`, 2026-09-20 — "user can write anything in re-prompting, it can be any missing
+   item"): venue, date, time, telephone, address (lines split on ";" or ","), file reference, date of issue,
+   precedence, copy number, amendments date, secretary, distribution ("addressee | copies | remarks" rows;
+   copies nobody gave print "xxx...xxx"). The model is shown "xxx...xxx" against each missing field, and for a
+   header value EVERY capitalised word and number must be in the user's words — the sentence rule skipped
+   the first word, so an invented one-word venue ("Dhanpur") got through.
 4. **Nothing else moves** — untouched lines are copied exactly, and `_regroup` remaps the ITEM grouping from
    the old lines to the new with difflib instead of grouping again, so ITEMs do not reshuffle and no second
    model call is made. Deletions are applied last, together, so indices never shift underneath.
@@ -517,6 +524,45 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   dropping small finds anyway and 6000 was checked on only two transcripts. Calls with 1800 and the built-in savings:
   45 min 25 (was 27), 3 h 141 (was 153); 6000 gives 12 and 39 once the six-transcript test shows it loses nothing.
   **The live Deployment still has ESSENCE_POINTS_PER_ITEM=4** — change it to 0 in the console.
+- **Nothing made up in the header — `xxx...xxx` for every missing detail, 2026-09-20.** The user saw a real job print
+  "Tele: 0194-2450101", "Headquarters 99 Specimen Brigade", "RK Verma" and "HQ 15 Specimen Corps": the MADE-UP details
+  of `templates/sample_template_unit.docx` (a test file from 2026-09-15), which had been attached to real jobs in IMIR
+  as the unit's template. The user's rule: "if any information is not provided … put xxx...xxx. DO NOT MAKE something
+  from yourself." Now (1) `docx_export.MISSING = "xxx...xxx"` prints for the telephone, address, file reference and
+  its date, the title's place/time/date, each ITEM's classification ("(UNCLASSIFIED)" only when the job says so), the
+  secretary's name and rank, the amendments date and the distribution — replacing "(Initials and Name)"/"Rank", the
+  dotted line and the silent omissions; precedence and copy number still appear only when given (the manual uses them
+  only when they apply). (2) `template_details.load` ignores a template whose details contain the word "Specimen"
+  (`template_status: specimen`) — each value WAS in the template, so the grounding check could not catch it. 15 tests
+  (sample ignored, the same file with real-looking values still used, every marker, no marker when all is given) and
+  the 38 layout rules (the "dt" rule now accepts "dt <date>") pass. The fix in IMIR is data: attach the unit's real
+  template, or none.
+- **Any missing item can be filled by a re-prompt — 2026-09-20** (see *Editing*, guard 3). 20 tests: one prompt filling
+  address, telephone, file reference + date of issue, precedence, secretary, amendments date, distribution and
+  classification leaves a single "xxx...xxx" (the copies nobody gave); refused: a number the user never typed, changing
+  a job-set classification, "top secret" read as SECRET, a grade the prompt never names, an invented one-word venue.
+  The backend must send the re-prompt with `mode: "edit"` and the SAME conversationId — otherwise it is a new meeting.
+- **An edit saves its state LAST — 2026-09-20.** It used to save the new state to MinIO before updating Elasticsearch;
+  an Elasticsearch outage then left the edit applied behind a FAILED ack, and the user's retry applied it again ("delete
+  point 5" twice deletes two points). Now: new .docx → Elasticsearch record → state → chunks (the order `minutes.process`
+  already used), and a state that cannot be saved fails the edit ("…was not made. Send it again.") instead of passing
+  silently. Proved: with Elasticsearch down, and with the state write failing, the minutes stay exactly as they were and
+  the resent change deletes exactly one point. MinIO stays the source of truth — Elasticsearch holds neither the header
+  nor the ITEM grouping, so an edit read from it would print a different document. Not covered: a Kafka redelivery after
+  a pod dies between the state save and the offset commit (a narrow window); the backend should key edit messages by
+  conversationId if it ever runs more than one partition.
+- **Fillable-form PDFs and turned scans — fixed 2026-09-20** (`documents._extract_pdf`, `_ocr_page`). A tester's 2-page PDF
+  (52 KB) failed "No text could be extracted": text layer empty and BOTH pages OCR'd to 0 characters. Reproduced with a
+  fillable form — what was typed sits in form fields, which are neither page text nor drawn for OCR (drawing them with
+  `init_forms` still OCR'd to nothing). Now every page is flattened first (`FPDFPage_Flatten`, FLAT_NORMALDISPLAY), so
+  fields and typed-on notes become page text, read exactly. The same investigation corrected an earlier claim here:
+  sideways and upside-down scans do NOT "read fine" — they read as junk (10% and 8% real words vs 86% upright; the
+  count of characters had hidden it). An OCR'd page under 50% real words (system wordlist; Devanagari letters count) is
+  now asked its orientation (Tesseract osd; for Devanagari, which osd often cannot place, all three turns are tried) and
+  read again upright: English 90°/180° back to 86%, Hindi 90° 97% of words right; upright pages unchanged in text and
+  time (all six scanned transcripts identical). A PDF with truly nothing now says to re-save it (Print → Save as PDF) or
+  send DOCX. **`documents.py` is no longer byte-identical to `~/offline-mom-api/api/utils/documents.py`** — copy it back
+  there once, as for docx_export.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

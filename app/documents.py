@@ -281,16 +281,74 @@ def _ocr_page(page, ocr_lang: str) -> str:
     try:
         image = bitmap.to_pil()
         try:
-            return pytesseract.image_to_string(image, lang=ocr_lang) or ""
+            text = pytesseract.image_to_string(image, lang=ocr_lang) or ""
+            return _upright(image, text, ocr_lang) if _readable(text) < READABLE else text
         finally:
             image.close()
     finally:
         bitmap.close()
 
 
+# A SIDEWAYS OR UPSIDE-DOWN SCAN reads as junk, not as nothing: Tesseract does not turn a page the right
+# way up by itself. Measured 2026-09-20 on one scanned transcript page — upright 86% real words, turned 90°
+# 10% ("Z JO [ ase {aU UI NO 97705 …"), upside down 8% — and phone scans are often sideways. So a page
+# whose text is mostly not words is asked which way up it is (Tesseract's orientation check, "osd"),
+# turned, and read again; the better reading is kept. An upright page never pays for this.
+READABLE = 0.5
+_dictionary = None
+
+
+def _readable(text: str) -> float:
+    """Share of the words that are real: English words from the system wordlist, and Devanagari words
+    (any run of Devanagari letters — its digits do not count, junk is full of them). 1.0 when there is no
+    wordlist to check against."""
+    global _dictionary
+    if _dictionary is None:
+        try:
+            with open("/usr/share/dict/american-english", encoding="utf-8", errors="ignore") as f:
+                _dictionary = {w.strip().lower() for w in f if w.strip()}
+        except OSError:
+            _dictionary = set()
+    if not _dictionary:
+        return 1.0
+    latin = re.findall(r"[A-Za-z]{3,}", text)
+    hindi = re.findall(r"[\u0900-\u0963\u0970-\u097F]{2,}", text)     # letters and signs, not the digits ०-९
+    if len(latin) + len(hindi) < 5:
+        return 1.0                               # too little to judge; an almost empty page stays as read
+    real = sum(w.lower() in _dictionary for w in latin) + len(hindi)
+    return real / (len(latin) + len(hindi))
+
+
+def _upright(image, text: str, ocr_lang: str) -> str:
+    """The page read the right way up. Tesseract's orientation check names the turn for Latin script;
+    for Devanagari it often has no answer, so then all three turns are read and the best one kept."""
+    import pytesseract
+    try:
+        osd = pytesseract.image_to_osd(image, config="--psm 0")
+        angles = [int(re.search(r"Rotate: (\d+)", osd).group(1))]
+    except Exception:
+        angles = [0]
+    if angles == [0]:
+        angles = [90, 180, 270]
+    best, best_angle, best_score = text, 0, _readable(text)
+    for angle in angles:
+        turned = image.rotate(-angle, expand=True)   # osd gives the clockwise turn; PIL turns anticlockwise
+        try:
+            again = pytesseract.image_to_string(turned, lang=ocr_lang) or ""
+        finally:
+            turned.close()
+        score = _readable(again)
+        if score > best_score:
+            best, best_angle, best_score = again, angle, score
+    if best_angle:
+        logger.info(f"[DOC] page was turned {best_angle}° — read again upright ({best_score:.0%} real words)")
+    return best
+
+
 def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
     try:
         import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
     except ImportError as e:  # pragma: no cover - dependency is in requirements.txt
         raise DocumentError(f"PDF support is not installed in this image: {e}")
 
@@ -304,12 +362,21 @@ def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
         raise DocumentError(f"Could not read this PDF — it may be corrupt ({e}).")
 
     blocks: List[str] = []
-    text_pages = ocr_pages = 0
+    text_pages = ocr_pages = flattened = 0
     ocr_budget_hit = False
     try:
         for index in range(n_pages):
             page = pdf[index]
             try:
+                # FORM FIELDS AND ANNOTATIONS INTO THE PAGE. A fillable form keeps what was typed in its
+                # fields, not in the page: the text layer is empty AND the page is drawn without them, so
+                # OCR reads a blank page too — "No text could be extracted", seen on the cluster
+                # 2026-09-20 and reproduced with a form PDF. Flattening turns fields and typed-on notes
+                # into ordinary page text, read exactly below; a page must be reloaded to show it.
+                if pdfium_c.FPDFPage_Flatten(page.raw, pdfium_c.FLAT_NORMALDISPLAY) == pdfium_c.FLATTEN_SUCCESS:
+                    page.close()
+                    page = pdf[index]
+                    flattened += 1
                 textpage = page.get_textpage()
                 try:
                     page_text = textpage.get_text_range() or ""
@@ -337,6 +404,8 @@ def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
     finally:
         pdf.close()
 
+    if flattened:
+        logger.info(f"[DOC] {flattened} page(s) had form fields or notes — merged into the page text")
     if ocr_budget_hit:
         logger.warning(
             f"[DOC] OCR page budget ({OCR_MAX_PAGES}) reached — later scanned pages skipped"
@@ -349,10 +418,12 @@ def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
                 f"No text could be extracted from this PDF ({n_pages} pages). It has no text "
                 "layer and OCR is disabled on this service (ENABLE_OCR=false)."
             )
+        # Skewed, faint, 75 dpi, inverted and sideways scans all still read (measured 2026-09-20), so
+        # nothing at all means the pages carry no readable text: blank, or drawn in a way no reader sees.
         raise DocumentError(
-            f"No text could be extracted from this PDF ({n_pages} pages), with OCR enabled. "
-            "The pages are most likely blank, or scans too low-resolution or skewed for OCR "
-            "to read."
+            f"No text could be read from this PDF ({n_pages} pages), not even with OCR — the pages look "
+            "blank. If it shows text when you open it, save it again as a PDF (Print, then Save as PDF) "
+            "or send it as DOCX."
         )
 
     source = "pdf-text" if not ocr_pages else ("pdf-ocr" if not text_pages else "pdf-mixed")

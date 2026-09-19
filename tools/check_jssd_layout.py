@@ -173,7 +173,8 @@ def main():
             "address lines single-spaced (Part 1 para 8.2, Note 8)")
     r.check(abs((fref[0] - a3[0]) - 2 * LINE) < TOL,
             "file reference two line feeds below the address (Part 1 Note 12)")
-    dt = next((it for it in p1 if it[3] == "dt"), None)
+    # "dt" alone, or "dt" and the date after it — the date, or "xxx...xxx" when none is given.
+    dt = next((it for it in p1 if it[3] == "dt" or it[3].startswith("dt ")), None)
     r.check(dt and abs(dt[0] - fref[0]) < 0.02,
             "file reference and date on one line, joined by 'dt' (Part 1 paras 20.1.5, 20.1.7)")
 

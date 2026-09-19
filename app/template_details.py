@@ -83,6 +83,10 @@ _WHOLE_WORD_PLACEHOLDERS = {"appointment", "date", "dt", "dt date", "precedence"
                             "remarks", "no of copies", "distribution", "addressee", "signature"}
 
 
+# The word itself, in any detail: see load().
+_SPECIMEN_WORD = re.compile(r"\bspecimen\b", re.I)
+
+
 def is_specimen(value: str) -> bool:
     v = re.sub(r"\s+", " ", (value or "")).strip()
     if not v or _ONLY_PUNCT.match(v):
@@ -300,7 +304,7 @@ def merge(job_meta: Dict[str, Any], template: Dict[str, Any]) -> Tuple[Dict[str,
 @dataclass
 class TemplateResult:
     name: str = ""
-    status: str = "none"          # none | used | not_jssd | unreadable | no_details | failed
+    status: str = "none"          # none | used | not_jssd | unreadable | no_details | specimen | failed
     reason: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
     dropped: List[str] = field(default_factory=list)
@@ -358,6 +362,18 @@ def load(job, store) -> TemplateResult:
 
     for d in res.dropped:
         logger.info(f"{tag} refused {d}")
+    # A SPECIMEN'S DETAILS ARE NOT A UNIT'S. The sample template in templates/ ("Headquarters 99 Specimen
+    # Brigade", "Tele: 0194-2450101", "RK Verma") was attached to real jobs on the cluster and its made-up
+    # telephone, address, file reference, secretary and distribution were printed as fact (2026-09-20).
+    # Each value passed the checks — it IS in the template — so the filter above cannot see it. A real
+    # unit's template never says "Specimen"; if any detail does, the whole template is a specimen and none
+    # of it is used: the minutes then show "xxx...xxx" where those details go.
+    if res.details and _SPECIMEN_WORD.search(json.dumps(res.details)):
+        res.status = "specimen"
+        res.reason = "its details say 'Specimen' — a sample template, not a unit's; none of them used"
+        res.details = {}
+        logger.warning(f"{tag} ignored — {res.reason}")
+        return res
     if res.details:
         res.status = "used"
         logger.info(f"{tag} standing details: {sorted(res.details)} (markers: {anchors})")

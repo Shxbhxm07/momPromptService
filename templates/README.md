@@ -14,7 +14,7 @@ acknowledgement back on Kafka and a Word file in MinIO.
 | `job-message-minimal.json` | Job with a document and a prompt, nothing optional |
 | `job-message-prompt-only.json` | Job with **no document** — the meeting described in the prompt |
 | `job-message-template.json` | Job with the HQ's **official JSSD template** + a prompt |
-| `sample_template_unit.docx` | A unit's filled template: its address, telephone, file reference, secretary and distribution |
+| `sample_template_unit.docx` | A **SAMPLE** unit template with **made-up** details ("99 Specimen Brigade", "Tele: 0194-2450101", "RK Verma"). The service ignores it (`template_status: specimen`) — **never attach it to real jobs in IMIR** |
 | `sample_template_blank_specimen.docx` | The Appendix AD specimen with placeholders only — should contribute **nothing** |
 | `specimen_data.json` | The exact data the two specimens were rendered from |
 
@@ -121,8 +121,10 @@ Use `MoM_Specimen_Full.docx` as the reference.
 
 The template supplies **only the issuing HQ's standing details** — address, telephone, file reference,
 signature block and distribution list. The **layout always follows the JSSD manual**, and the **meeting
-content always comes from the prompt**. Upload `sample_template_unit.docx` to `mom/templates/`, then send
-`job-message-template.json`.
+content always comes from the prompt**. Test with **your unit's real template** — the samples here are
+specimens and contribute nothing. Anything neither the job nor the template gives prints as **`xxx...xxx`**
+(telephone, address, file reference, date, venue, time, classification, secretary, amendments date,
+distribution) — never a guess.
 
 - [ ] Telephone, the three address lines, the signature block and the distribution rows match the template
 - [ ] Anything the job sets in `mom_meta` **wins** over the template (e.g. put a `file_ref` in the job — it must replace the template's)
@@ -134,6 +136,7 @@ content always comes from the prompt**. Upload `sample_template_unit.docx` to `m
 
 | send as template | expected |
 |---|---|
+| `sample_template_unit.docx` | SUCCESS; nothing taken from it (its details say "Specimen"); `template_status: specimen`; `xxx...xxx` in the header |
 | `sample_template_blank_specimen.docx` | SUCCESS; nothing taken from it; `template_status: no_details` |
 | a non-JSSD document (letter, company profile) | SUCCESS; template ignored; `template_status: not_jssd` |
 | a path that does not exist | SUCCESS; template ignored; `template_status: unreadable` |

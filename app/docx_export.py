@@ -13,10 +13,10 @@ edition). Each rule below cites where it comes from:
 
 WHAT A RECORDING CANNOT SUPPLY. The superscription (telephone, precedence, address, file reference),
 the security classification, the secretary and the distribution are never spoken in a meeting. They
-come from `meta` — the Kafka job's optional `mom_meta` object — and are left out, or left for the
-secretary to fill in, when absent. The classification is never inferred: Part 1 para 11.5 has an
-unclassified document carry no marking at all, which is the default, and a wrong grading on a
-defence document is worse than none.
+come from `meta` — the Kafka job's `mom_meta`, or the HQ's template — and print as MISSING
+("xxx...xxx") when absent: never guessed, never filled from anywhere else. The classification is never
+inferred: with none given the pages carry no marking and each ITEM's bracket reads "(xxx...xxx)"; a
+wrong grading on a defence document is worse than none.
 
 ONE ITEM FOR NOW. AD records each agenda item as its own block (ITEM I, ITEM II …) ending in its
 decision. llama-service does not yet say which points and decisions belong to which agenda item, so
@@ -62,6 +62,13 @@ COL = Inches(1.0)              # AD: each of the Action and Info columns.
 SIGNATURE_FEEDS = 9            # AD: "as required, usually nine" line feeds down to the signature.
 LINES_PER_PAGE = 42            # only for the fallback page-count estimate
 DOTS = "……………"                # AD marks what the secretary fills in with a row of dots.
+# WHAT PRINTS WHERE THE LAYOUT NEEDS A DETAIL NOBODY PROVIDED — the user's rule, 2026-09-20: "if any
+# information is not provided for something then put xxx...xxx. DO NOT MAKE something from yourself."
+# Telephone, address, file reference and its date, the title's place, time and date, each ITEM's
+# classification, the secretary, the amendments date and the distribution: given by the job, the template
+# or the source, or this. One marker everywhere, so the gaps to fill are plain at a glance. Precedence and
+# copy number are not gaps when absent — the manual uses them only when they apply.
+MISSING = "xxx...xxx"
 
 # ── security classification ──────────────────────────────────────────────────────────────────────
 # Written in full: Part 1 para 12.1 — never abbreviated in service writing.
@@ -432,19 +439,16 @@ def _laid_out_pages(data: bytes) -> int:
 def _superscription(doc, meta) -> bool:
     """Telephone and precedence on one line, the copy number under the precedence, the originator's
     address, then the file reference and date — each block two-line spaced (AD; Part 1 paras 19-20).
-    Only what `meta` supplies is written."""
-    tele, prec = _clean(meta.get("telephone")), _clean(meta.get("precedence")).upper()
-    copy_no, address, file_ref = _clean(meta.get("copy_no")), _lines(meta.get("address")), _clean(meta.get("file_ref"))
-    blocks = []
-    if tele or prec:
-        blocks.append([(tele if not tele or tele.lower().startswith("tele") else f"Tele: {tele}", prec)])
+    What `meta` does not supply prints as MISSING; precedence and copy number only when given."""
+    tele, prec = _clean(meta.get("telephone")) or MISSING, _clean(meta.get("precedence")).upper()
+    copy_no, address = _clean(meta.get("copy_no")), _lines(meta.get("address")) or [MISSING]
+    file_ref = _clean(meta.get("file_ref")) or MISSING
+    blocks = [[(tele if tele.lower().startswith("tele") else f"Tele: {tele}", prec)]]
     if copy_no:
         blocks.append([("", copy_no if copy_no.lower().startswith("copy") else f"Copy No {copy_no}")])
-    if address:
-        blocks.append([(a, "") for a in address])
-    if file_ref:
-        # The date of issue is left blank for the signatory to write in ink (Part 1 para 41).
-        blocks.append([(f"{file_ref}\tdt {_date(meta.get('issue_date'))}".rstrip(), "")])
+    blocks.append([(a, "") for a in address])
+    # The date of issue: the signatory writes it in ink (Part 1 para 41); until then, the marker.
+    blocks.append([(f"{file_ref}\tdt {_date(meta.get('issue_date')) or MISSING}", "")])
     for i, block in enumerate(blocks):
         if i:
             _blank(doc)
@@ -463,17 +467,12 @@ def _title(doc, mom, meta):
     """A centre heading in block capitals, bold, not underlined, giving the place, time, date and
     purpose of the meeting (AD note 2; Part 1 paras 22 and 51). A long title breaks between phrases
     so that each line reads on its own (Part 1 App E note 11)."""
-    venue = _clean(meta.get("venue")) or _clean(mom.get("venue"))
-    when = _time(meta.get("meeting_time") or mom.get("meeting_time"))
-    day = _date(meta.get("meeting_date") or mom.get("meeting_date"))
-    head = "MINUTES OF THE MEETING" + (" HELD" if venue or when or day else "") + (f" AT {venue}" if venue else "")
-    phrases = [head]
-    at = " ".join(x for x in (f"AT {when}" if when else "", f"ON {day}" if day else "") if x)
-    if at:
-        phrases.append(at)
-    topic = _clean(mom.get("title"))
-    if topic:
-        phrases.append(f"TO DISCUSS {topic}")
+    # Place, time and date are mandatory (AD note 2): one nobody gave prints as MISSING, never a guess.
+    venue = _clean(meta.get("venue")) or _clean(mom.get("venue")) or MISSING
+    when = _time(meta.get("meeting_time") or mom.get("meeting_time")) or MISSING
+    day = _date(meta.get("meeting_date") or mom.get("meeting_date")) or MISSING
+    phrases = [f"MINUTES OF THE MEETING HELD AT {venue}", f"AT {when} ON {day}",
+               f"TO DISCUSS {_clean(mom.get('title')) or MISSING}"]
     lines: List[str] = []
     for phrase in phrases:
         if lines and len(lines[-1]) + 1 + len(phrase) <= 52:
@@ -482,7 +481,7 @@ def _title(doc, mom, meta):
             lines.append(phrase)
     p = _fmt(doc.add_paragraph(), align=CENTRE, keep=True)
     for i, line in enumerate(lines):
-        r = _run(p, line.upper().rstrip("."), bold=True)
+        r = _run(p, line.upper().rstrip(".").replace(MISSING.upper(), MISSING), bold=True)
         if i < len(lines) - 1:
             r.add_break()
 
@@ -659,14 +658,14 @@ def _closing(w: _Minutes, meta):
     """The standard closing paragraph, then the secretary's signature block nine line feeds below it
     (AD; Ch 6 paras 15 and 16.17: the secretary signs once the chairman has approved the draft)."""
     _blank(w.doc)
-    by = _date(meta.get("amendments_by")) or DOTS
+    by = _date(meta.get("amendments_by")) or MISSING
     text = f"Agreement with the minutes will be assumed unless amendments are received by {by}"
     _para(w.doc.add_paragraph(), w.next(), text, keep=True)
     for _ in range(SIGNATURE_FEEDS - 1):
         _blank(w.doc, keep=True)
     sec = meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {}
-    name = _clean(sec.get("name") or meta.get("secretary_name")) or "Initials and Name"
-    rank = _clean(sec.get("rank") or meta.get("secretary_rank")) or "Rank"
+    name = _clean(sec.get("name") or meta.get("secretary_name")) or MISSING
+    rank = _clean(sec.get("rank") or meta.get("secretary_rank")) or MISSING
     for i, line in enumerate((f"({name})", rank, "Secretary")):   # Part 1 para 27.1
         _fmt(w.doc.add_paragraph(), align=LEFT, keep=i < 2).add_run(line)
 
@@ -677,11 +676,15 @@ def _distribution(doc, meta):
     listed, as in every JSSD specimen."""
     rows = []
     for d in meta.get("distribution") or []:
+        # Copies nobody gave print as MISSING, not a guessed "One"; the office File copy is the manual's own.
         if isinstance(d, dict) and _clean(d.get("addressee")):
-            rows.append((_clean(d.get("addressee")), _clean(d.get("copies")) or "One",
-                         _clean(d.get("copy_no")), _clean(d.get("remarks"))))
+            name = _clean(d.get("addressee"))
+            copies = _clean(d.get("copies")) or ("One" if name.lower() == "file" else MISSING)
+            rows.append((name, copies, _clean(d.get("copy_no")), _clean(d.get("remarks"))))
         elif isinstance(d, str) and _clean(d):
-            rows.append((_clean(d), "One", "", ""))
+            rows.append((_clean(d), "One" if _clean(d).lower() == "file" else MISSING, "", ""))
+    if not rows:                                   # nobody said who receives the minutes
+        rows.append((MISSING, MISSING, "", ""))
     if not any(r[0].lower() == "file" for r in rows):
         rows.append(("File", "One", "", ""))
     _blank(doc, keep=True)
@@ -771,7 +774,9 @@ def _build(mom: Dict[str, Any], meta: Dict[str, Any], pages: int = 0) -> Tuple[b
     _blank(doc, keep=True)
     _present(w, mom.get("attendees") or [])
     _introduction(w, mom)
-    items = _items(mom, grade)
+    # Each ITEM states its classification in brackets (AD note 5). "(UNCLASSIFIED)" only when the job SAID
+    # so; with no classification given at all, the marker — not a guess.
+    items = _items(mom, grade or ("UNCLASSIFIED" if _clean(meta.get("classification")) else MISSING))
     if items:
         _items_table(w, items)
     _closing(w, meta)

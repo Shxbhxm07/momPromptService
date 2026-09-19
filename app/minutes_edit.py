@@ -17,8 +17,9 @@ FOUR GUARDS, none optional:
      the line at that index is dropped, so "point 41" can never hit point 42.
   2. INVENTED DETAIL — names and numbers in new text must already appear in the user's instruction,
      the minutes, or the header. The model cannot supply a due date nobody gave.
-  3. CLASSIFICATION AND PRECEDENCE are never editable from chat text. A misread "remove the secret
-     part" must not declassify a document; those come from `mom_meta` only.
+  3. CLASSIFICATION is never CHANGED from chat text: a misread "remove the secret part" must not
+     declassify a document. One the job never gave (printed "xxx...xxx") may be FILLED — only with the
+     one grade word the user wrote ("mark it restricted"), never with one the model inferred.
   4. NOTHING ELSE MOVES — untouched lines are copied exactly, and the ITEM grouping is remapped from
      the old minutes to the new rather than worked out again, so items do not reshuffle.
 
@@ -51,8 +52,17 @@ MIN_QUOTE = 8                 # a shorter quote proves nothing about which line 
 
 # Header fields a chat instruction may change. Classification, precedence and copy number are NOT
 # here, by guard 3; neither is the distribution list, which comes from the HQ's template.
-EDITABLE_META = {"venue", "meeting_date", "meeting_time", "file_ref", "amendments_by", "telephone",
-                 "secretary_name", "secretary_rank"}
+# Every header detail the minutes print — each shows "xxx...xxx" until someone provides it, and the user may
+# provide any of them in a later prompt, in any wording (the user's rule, 2026-09-20). Classification only
+# under guard 3.
+EDITABLE_META = {"venue", "meeting_date", "meeting_time", "telephone", "address", "file_ref", "issue_date",
+                 "precedence", "copy_no", "classification", "amendments_by", "secretary_name", "secretary_rank",
+                 "distribution"}
+MISSING = "xxx...xxx"
+# The grades, longest first so "top secret" is not also read as "secret"; the abbreviations are Part 1's.
+_GRADE_WORDS = [("TOP SECRET", r"top\s+secret"), ("CONFIDENTIAL", r"confidential|confd"),
+                ("RESTRICTED", r"restricted|restd"), ("UNCLASSIFIED", r"unclassified|unclas"),
+                ("SECRET", r"secret")]
 LISTS = ("key_points", "decisions", "action_items", "agenda", "attendees", "key_figures")
 
 _SYSTEM = """You are given MINUTES already written from a meeting, and one INSTRUCTION from the user asking to change them.
@@ -62,7 +72,11 @@ Answer with a list of CHANGES. Never rewrite the minutes, never repeat unchanged
 Every change names what it touches by its index in the list shown, and quotes the first words of that line so the change can be checked.
 
 Operations:
-- set_meta   : change a header field. field = venue | meeting_date | meeting_time | file_ref | amendments_by | telephone | secretary_name | secretary_rank
+- set_meta   : fill or change a header field. field = venue | meeting_date | meeting_time | telephone | address | file_ref | issue_date | precedence | copy_no | classification | amendments_by | secretary_name | secretary_rank | distribution
+               address      : its lines separated by " ; "  (e.g. "HQ 7 Inf Bde ; C/O 56 APO ; PIN 900111")
+               distribution : the COMPLETE list after the change, existing rows included, separated by " ; ",
+                              each "addressee | copies | remarks" — copies and remarks only if the user gave them
+               issue_date   : the date after "dt" beside the file reference
 - set_title  : change the meeting's title
 - delete     : remove one line.              list + index + quote
 - replace    : reword one line.              list + index + quote + value
@@ -74,7 +88,10 @@ Operations:
 
 Rules:
 - Use ONLY words the user gave you or that are already in the minutes. Never invent a name, a date or a number.
-- The user cannot change the security classification here; answer "cannot" if asked.
+- A header field showing xxx...xxx was never provided: fill it when the user gives it, in the user's words.
+- classification: only when the HEADER shows xxx...xxx for it, and only the grade the user wrote (RESTRICTED,
+  CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED). A classification already set cannot be changed here;
+  answer "cannot" if asked.
 - If the instruction asks for something that needs the original meeting document read again (for example "focus more on the budget"), answer "cannot".
 - Leave unused fields as "" and unused indexes as -1."""
 
@@ -126,12 +143,30 @@ def _numbered(items: List[Any]) -> str:
     return "\n".join(f"{i}. {_line_of(v)[:SNIPPET]}" for i, v in enumerate(items)) or "(none)"
 
 
+def _rows(meta: Dict[str, Any]) -> str:
+    rows = []
+    for d in meta.get("distribution") or []:
+        if isinstance(d, dict) and _flat(d.get("addressee")):
+            rows.append(" | ".join(_flat(d.get(k)) for k in ("addressee", "copies", "remarks")).rstrip(" |"))
+        elif isinstance(d, str) and _flat(d):
+            rows.append(_flat(d))
+    return " ; ".join(rows)
+
+
 def _shown(mom: Dict[str, Any], meta: Dict[str, Any]) -> str:
+    """The minutes as the model sees them: every header field, xxx...xxx where it was never provided."""
     sec = meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {}
+    address = meta.get("address")
+    values = {
+        "venue": meta.get("venue") or mom.get("venue"), "meeting_date": meta.get("meeting_date") or mom.get("meeting_date"),
+        "meeting_time": meta.get("meeting_time") or mom.get("meeting_time"), "telephone": meta.get("telephone"),
+        "address": " ; ".join(_flat(a) for a in address) if isinstance(address, list) else address,
+        "file_ref": meta.get("file_ref"), "issue_date": meta.get("issue_date"), "precedence": meta.get("precedence"),
+        "copy_no": meta.get("copy_no"), "classification": meta.get("classification"),
+        "amendments_by": meta.get("amendments_by"), "secretary_name": sec.get("name"),
+        "secretary_rank": sec.get("rank"), "distribution": _rows(meta)}
     header = [f"title: {_flat(mom.get('title'))}"]
-    header += [f"{f}: {_flat(meta.get(f))}" for f in
-               ("venue", "meeting_date", "meeting_time", "file_ref", "amendments_by", "telephone")]
-    header += [f"secretary_name: {_flat(sec.get('name'))}", f"secretary_rank: {_flat(sec.get('rank'))}"]
+    header += [f"{f}: {_flat(v) or MISSING}" for f, v in values.items()]
     parts = ["HEADER:\n" + "\n".join(header)]
     for name in LISTS:
         parts.append(f"{name.upper()}:\n{_numbered(mom.get(name) or [])}")
@@ -154,6 +189,37 @@ def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str) -> Dict[st
     return data if isinstance(data, dict) else {}
 
 
+# ── guard 3: a classification is filled only from the user's own word, and never changed ─────────────
+def _grades_in(text: str) -> List[str]:
+    """Every grade the text names, longest first, each span counted once ("top secret" is not "secret")."""
+    found, rest = [], (text or "").lower()
+    for grade, pattern in _GRADE_WORDS:
+        rx = re.compile(rf"\b(?:{pattern})\b")
+        if rx.search(rest):
+            found.append(grade)
+            rest = rx.sub(" ", rest)
+    return found
+
+
+def _grade_of(value: str) -> str:
+    grades = _grades_in(value)
+    return grades[0] if len(grades) == 1 else ""
+
+
+def _classification_refused(meta: Dict[str, Any], value: str, instruction: str) -> str:
+    """Why this classification may not be set, or "" when it may."""
+    if _flat(meta.get("classification")):
+        return (f"the classification is {_flat(meta.get('classification'))!r}, set with the job — it cannot be "
+                "changed from a prompt")
+    grade, said = _grade_of(value), _grades_in(instruction)
+    if not grade:
+        return "classification: give one of RESTRICTED, CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED"
+    if said != [grade]:
+        return (f"classification: set only a grade you wrote yourself — the instruction names "
+                f"{', '.join(said) or 'none'}")
+    return ""
+
+
 # ── guard 2: no invented detail ──────────────────────────────────────────────────────────────────
 def _normalise(text: str) -> str:
     text = _flat(text).lower()
@@ -162,11 +228,16 @@ def _normalise(text: str) -> str:
     return text
 
 
-def _unsupported(new_text: str, allowed: str) -> List[str]:
-    """Names and numbers in `new_text` that appear nowhere in `allowed`. Empty means it checks out."""
+def _unsupported(new_text: str, allowed: str, every_word: bool = False) -> List[str]:
+    """Names and numbers in `new_text` that appear nowhere in `allowed`. Empty means it checks out.
+
+    A sentence's first word is capitalised anyway, so it is skipped — except for a header value
+    (`every_word`), where every word is a name, a place or a rank: an invented one-word venue must not pass.
+    """
     hay = _normalise(allowed)
     bad = []
-    for token in _CAP.findall(_flat(new_text)) + _NUM.findall(_flat(new_text)):
+    caps = re.findall(r"\b[A-Z][A-Za-z'’\-]{1,}", _flat(new_text)) if every_word else _CAP.findall(_flat(new_text))
+    for token in caps + _NUM.findall(_flat(new_text)):
         if _normalise(token) not in hay:
             bad.append(token)
     return bad
@@ -251,14 +322,38 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             if field not in EDITABLE_META:
                 refused.append(f"{field or 'that header field'} cannot be changed from a prompt")
                 continue
-            bad = _unsupported(value, allowed)
+            bad = _unsupported(value, allowed, every_word=True)
             if bad:
                 refused.append(f"{field}: {value!r} mentions {', '.join(bad)}, which you did not give")
                 continue
-            if field.startswith("secretary_"):
+            if field == "classification":
+                why = _classification_refused(meta, value, instruction)
+                if why:
+                    refused.append(why)
+                    continue
+                value = _grade_of(value)
+                meta["classification"] = value
+            elif field.startswith("secretary_"):
                 sec = dict(meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {})
                 sec[field.split("_", 1)[1]] = value
                 meta["secretary"] = sec
+            elif field == "address":
+                parts = [x for x in (_flat(v) for v in re.split(r"\s*[;\n]\s*", value)) if x]
+                if len(parts) == 1:                     # "HQ 7 Inf Bde, C/O 56 APO, PIN 900111"
+                    parts = [x for x in (_flat(v) for v in parts[0].split(",")) if x]
+                meta["address"] = parts
+            elif field == "distribution":
+                rows = []
+                for entry in re.split(r"\s*[;\n]\s*", value):
+                    bits = [_flat(b) for b in entry.split("|")] + ["", ""]
+                    if bits[0]:
+                        rows.append({"addressee": bits[0], "copies": bits[1], "remarks": bits[2]})
+                if not rows:
+                    refused.append("distribution: no addressee given")
+                    continue
+                meta["distribution"] = rows
+            elif field == "precedence":
+                meta["precedence"] = value.upper()
             else:
                 meta[field] = value
             done.append(f"{field} → {value}")
@@ -386,16 +481,26 @@ def process(job: KafkaJob, c: Clients) -> dict:
             if isinstance(groups, list) and groups:
                 mom["item_groups"] = _regroup(groups, before, mom)
 
+        # THE STATE IS SAVED LAST — it is what the next prompt edits, so it may change only once everything
+        # that can fail has succeeded. Saved first (as until 2026-09-20), an Elasticsearch outage after it
+        # left the edit applied behind a FAILED ack, and the user's natural retry applied it AGAIN: "delete
+        # point 5" twice deletes two different points. Now a failure anywhere leaves the saved minutes as
+        # they were — the new .docx sits unused under its own hash — and sending the change again is safe.
+        # Same order as a new job (minutes.process): file, search record, state; the chunk copy, which
+        # never raises, after.
         docx_bytes = build_mom_docx(mom, meta)
         bucket, key = c.store.upload(summary_object_key(job, hashlib.md5(docx_bytes).hexdigest(),
                                                         name=_file_name(state, job, mom)),
                                      docx_bytes, DOCX_MIME)
-        history.append(minutes_state.snapshot(state))
-        minutes_state.save(job, c.store, mom=mom, meta=meta, template=state.get("template") or {},
-                           object_key=key, bucket=bucket, instruction=instruction, changes=done,
-                           history=history)
         c.index.index_mom(job, mom, source="attached", summary_bucket=bucket, summary_object_key=key,
                           template=state.get("template") or {})
+        history.append(minutes_state.snapshot(state))
+        if not minutes_state.save(job, c.store, mom=mom, meta=meta, template=state.get("template") or {},
+                                  object_key=key, bucket=bucket, instruction=instruction, changes=done,
+                                  history=history):
+            # For a new job a lost state only costs the NEXT edit; for an edit it IS the edit.
+            raise ValueError("The change could not be saved to file storage, so it was not made. "
+                             "Send it again.")
         c.chunks.index_mom(job, mom, summary_bucket=bucket, summary_object_key=key)
 
         for line in done:
