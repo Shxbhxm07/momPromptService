@@ -1381,7 +1381,7 @@ class LLMManager:
 
     # ── High-recall, quote-grounded extraction ───────────────────────────────
     # Windows overlap so a point straddling a boundary is seen whole at least once. The size is the
-    # chunk size in env (MOM_WINDOW_CHARS, default 6000 — about two pages; it was 1800 until 2026-09-19).
+    # chunk size in env (MOM_WINDOW_CHARS, default 1800 — half a page; see llama/config.py).
     _WINDOW_CHARS = MOM_WINDOW_CHARS
     _WINDOW_OVERLAP = 350
     # The reply allowance grows with the window. A point comes back as ~60-90 tokens of JSON (text,

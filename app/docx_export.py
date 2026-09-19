@@ -546,6 +546,19 @@ _CARRIES_PREP = re.compile(r"(by|before|after|within|during|on|in|at|from|till|u
                            r"not later than|w\.?e\.?f\.?)\b", re.I)          # "by 30 Sep" — take as it is
 _STANDS_ALONE = re.compile(r"(immediate(ly)?|asap|at once|forthwith|ongoing|continuous(ly)?|"
                            r"in progress|tbc)\b", re.I)                      # "immediately", never "by immediately"
+# A span of days: "6-10 October", "28 to 30 Sep" — printed after "during", never "by".
+_SPAN = re.compile(r"\d\s*(?:-|–|to)\s*\d", re.I)
+
+
+def _already_dated(task: str, due: str) -> bool:
+    """Does the task already state its own date? Every number of the due date, and its month when it
+    names one, is in the task text — "…through the simulator from 28 to 30 September" printed a second
+    "by 28-30 September" after itself in a real run."""
+    nums = re.findall(r"\d+", due)
+    month = re.search(r"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec", due, re.I)
+    low = task.lower()
+    return bool(nums) and all(re.search(rf"(?<!\d){n}(?!\d)", task) for n in nums) \
+        and (not month or month.group(0).lower() in low)
 
 
 def flatten_items(mom) -> Tuple[List[str], List[str], List[Tuple[str, str]]]:
@@ -562,9 +575,10 @@ def flatten_items(mom) -> Tuple[List[str], List[str], List[Tuple[str, str]]]:
             continue
         task, due = _clean(ai.get("task")).rstrip("."), _clean(ai.get("due"))
         due = _date(due) or due
-        if due and due.lower() not in task.lower():
+        if due and due.lower() not in task.lower() and not _already_dated(task, due):
             joined = _CARRIES_PREP.match(due) or _STANDS_ALONE.match(due)
-            task += f" {due}" if joined else f" by {due}"
+            # A span is not a deadline: "by 6-10 October" read as nonsense in a real run.
+            task += f" {due}" if joined else (f" during {due}" if _SPAN.search(due) else f" by {due}")
         decisions.append((task, _clean(ai.get("assigned_to"))))
     return points, figures, decisions
 

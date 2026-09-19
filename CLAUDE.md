@@ -54,6 +54,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/model_notes.py` | drops the model's own preamble and footnotes printed as business ("Decision. Here are the action items extracted from the meeting transcript:", "Note: … some assumptions have been made"). Same test (`llama.utils.text_utils.is_model_note`) as the writer's `_bullets_to_list`, where they came from |
 | `app/figures_check.py` | drops a line carrying a number that is in the writer's PROMPTS but not in the source (the figures prompt's examples "$51,840", "7,30,340" were printed in a New Zealand meeting's minutes), and, when the source never mentions rupees, removes "(Rs …)" and lakh grouping. Spoken numbers count as present |
 | `app/repository.py` | **"From repository" files**: a file whose id is a repository id (24 hex, e.g. `6aad24087fb955220d1ad0cf`) is read from the platform's index (`REPOSITORY_INDEX`, `teamsync_v1`) — all chunks of that `fId` in pageNo/para order, overlaps removed, NOT routed. "Attach file" uploads (key ends in a UUID) are read from MinIO. `file_fids` are repository ids. Read-only |
+| `app/tidy_minutes.py` | code only, no model call, **never removes a fact**: a decision an action item already records is merged into it only when the kept line holds every number, name and all but one word of the other; owners written as the attendee list has them ("Rohit" → "Maj Rohit Negi", unique match only); after essence, a figure is dropped only when ONE printed point or decision holds all its numbers and every specific word of its label. No cap |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
@@ -489,8 +490,8 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   read runs only when windows are off (it repeated the windows' job over the whole transcript); the meeting-type
   guess is gone (always "general", no call); `MODEL_CONTEXT_LIMIT` 32768 → **65536** in the YAML, so the main read
   takes up to ~215k characters in one call instead of 20k-character parts + a merge. Counted with a recording fake:
-  45 min **27 → 12 calls** (66k → 47k tokens), 3 hours **153 → 39** (471k → 274k). The user asked for exactly one
-  knob — do not add back the per-step switches. Two fixes the bigger windows needed: the window reply allowance
+  45 min **27 → 12 calls** (66k → 47k tokens), 3 hours **153 → 39** (471k → 274k) — at 6000; the default went back
+  to 1800 the same day (next entry). The user asked for exactly one knob — do not add back the per-step switches. Two fixes the bigger windows needed: the window reply allowance
   grows with the window (1500 at ≤1800, capped 3000 — a 6000-char window returned up to 36 points, ~2000 tokens), and
   a third, no-JSON-mode attempt for a broken window. The breakage (a reply that is one point then whitespace to the
   token limit, in both JSON modes) is an OpenRouter-host quirk and random, not size-driven — 2 of 3 half-page windows
@@ -498,6 +499,24 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   Real-model accuracy, answer key of known facts/decisions/actions: 5-min 15/15 (1800) vs 15/15 (6000), 10-min 17/17
   (6000); the rest of the comparison stopped when the OpenRouter credit ran out (HTTP 402). Before changing
   MOM_WINDOW_CHARS again, re-measure on `scanned-transcripts/` (their exact text is in `printed-text/`).
+- **Repeats, first-name owners, a long figures list, "by 6-10 October" — fixed 2026-09-19** (`app/tidy_minutes.py`,
+  due dates in `docx_export.flatten_items`). A real 15-minute job printed 7 of its 24 "Decision." lines twice (decisions
+  and action items are de-duplicated each on its own and both print as "Decision."), owners as "Rohit"/"Karan", 44
+  figures mostly restating a point, "by 6-10 October", and "…from 28 to 30 September by 28-30 September". A first
+  version also capped figures at 5 per ITEM and merged loosely; the user's accuracy rule ended both — the cap cut 18
+  facts no other line carried ("120 grenades"), one shared word dropped "Young Officers course vacancies — 2" for "course
+  to start on 2 November", and a merge lost "before any test". Now every removal is provably redundant (see the files
+  table). On that job, rebuilt from its Word file: 8 → 7 pages, 24 → 20 decision lines (4 merged; the 3 with a qualifier
+  of their own stay double), 44 → 32 figures (each of the 12 removed shown against the one printed line that states all
+  of it), no number or word of the original missing, answer key 17/18 before and after. 24 edge-case tests, a full job +
+  edit, and the 38 layout rules pass. **Still open, seen on the same job:** every decision and figure landed under the
+  LAST ITEM — the decisions-and-figures grouping call gave nothing usable (reason not yet in a log) — and "retest for 85
+  personnel" where the transcript removes 9 first (76).
+- **Essence OFF and windows back to 1800 — 2026-09-19**, by the accuracy rule: `ESSENCE_POINTS_PER_ITEM=0` (code default
+  and YAML) prints every verified point; `MOM_WINDOW_CHARS` defaults to 1800, because the case for 6000 rested on essence
+  dropping small finds anyway and 6000 was checked on only two transcripts. Calls with 1800 and the built-in savings:
+  45 min 25 (was 27), 3 h 141 (was 153); 6000 gives 12 and 39 once the six-transcript test shows it loses nothing.
+  **The live Deployment still has ESSENCE_POINTS_PER_ITEM=4** — change it to 0 in the console.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in
@@ -614,6 +633,11 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
 
 ## Working with this user
 
+- **ACCURACY FIRST — the user's rule, 2026-09-19: "it does not matter if the MoM is long or short, my accuracy
+  levels must be 100."** Nothing true may be cut to make the minutes shorter. Every removal must be provably
+  redundant — another printed line still states the same numbers, names and words. Brevity steps that delete
+  content (essence's points-per-ITEM, a figures cap) stay OFF. Check any change with the scanned-transcript
+  answer key and an original-vs-new comparison (no number or word lost) before calling it done.
 - Plain, simple English, short. Give exact values and **UI click paths** (OCP console, Kafka UI, MinIO
   console), not CLI commands. Give times in IST.
 - Before a fix: a short pros/cons table, pick one, apply it in one go. One change at a time.

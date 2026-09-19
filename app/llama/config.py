@@ -142,16 +142,18 @@ MAX_NEW_TOKENS_CLASSIFY   = 512 if _IS_REASONING else 16
 MOM_WINDOW_KEY_POINTS = os.getenv("MOM_WINDOW_KEY_POINTS", "true").lower() == "true"
 
 # THE CHUNK SIZE: how many characters of the transcript each window call reads. Windows are most of a
-# job's model calls, one each, so this is the setting that decides how many calls a job makes: at 6000
-# (about two pages) a 45-minute meeting takes 12 calls and a 3-hour one 39; at the old 1800 (half a
-# page) 27 and 153. Smaller finds more small facts at more calls; much bigger and a window starts to
-# summarise instead of listing. The quote check is the same at any size. Below 800 is not accepted.
-# Typed in the OCP console, so "6,000" is read as 6000, and anything unreadable falls back to 6000 —
-# a bad value must not stop the pod from starting.
+# job's model calls, one each: at 1800 (half a page) a 45-minute meeting takes 25 calls and a 3-hour one
+# 141; at 6000 (about two pages) 12 and 39. Smaller finds more small facts; bigger makes fewer calls and,
+# much bigger, a window starts to summarise instead of listing. The quote check is the same at any size.
+# 1800 BECAUSE ACCURACY COMES FIRST (the user's rule, 2026-09-19). 6000 was the default for a day, argued
+# from essence.py printing only 4 points per ITEM, so small finds were dropped anyway; with every point
+# printed again that no longer holds, and 6000 was checked on only two transcripts (32/32). Raise it only
+# after the six scanned transcripts show no loss. Below 800 is not accepted; "1,800" is read as 1800 and
+# anything unreadable falls back to 1800 — a bad value must not stop the pod from starting.
 try:
-    MOM_WINDOW_CHARS = max(800, int(os.getenv("MOM_WINDOW_CHARS", "6000").replace(",", "").strip()))
+    MOM_WINDOW_CHARS = max(800, int(os.getenv("MOM_WINDOW_CHARS", "1800").replace(",", "").strip()))
 except ValueError:
-    MOM_WINDOW_CHARS = 6000
+    MOM_WINDOW_CHARS = 1800
 
 # Ask the model which extracted entries describe the same work, then merge them in code. Lexical dedupe
 # cannot see that "revise and re-record the LEP course" and "the revised script will be recorded

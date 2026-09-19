@@ -136,14 +136,14 @@ spec:
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
             # CHUNK SIZE: characters of transcript per window call. Decides most of a job's model calls:
-            # 6000 (~2 pages) = 12 calls for a 45-min meeting, 39 for 3 hours; 1800 (~half a page) = 27 and
-            # 153. Smaller catches more small details, at more calls. Minimum 800.
+            # 1800 (~half a page) = 25 calls for a 45-min meeting, 141 for 3 hours; 6000 (~2 pages) = 12 and
+            # 39. Smaller catches more small details. 1800 until a full test shows 6000 loses nothing.
             - name: MOM_WINDOW_CHARS
-              value: "6000"
-            # At most this many discussion points per ITEM (JSSD Ch 6 para 10: only the essence).
-            # Decisions, actions and figures are never cut. "0" keeps every point, as before.
+              value: "1800"
+            # Shortening: at most this many discussion points per ITEM. "0" = OFF, every verified point is
+            # printed — accuracy first, however long the minutes. A number >0 deletes real points.
             - name: ESSENCE_POINTS_PER_ITEM
-              value: "4"
+              value: "0"
             - name: WATSONX_API_KEY
               value: "CHANGE_ME"
           resources:

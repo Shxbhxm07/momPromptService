@@ -26,6 +26,7 @@ import minutes_state
 import prompt_leak
 import repository
 import template_details
+import tidy_minutes
 from config import MAX_SOURCE_CHARS, MIN_SOURCE_CHARS
 from docx_export import build_mom_docx, flatten_items
 from documents import extract_text_blocks
@@ -202,6 +203,12 @@ def process(job: KafkaJob, c: Clients) -> dict:
             logger.info(f"[JOB {job.conversation_id}] dropped the request back out of the "
                         f"minutes — {line}")
 
+        # Nothing said twice, owners by full name — before the grouping, so its indices are built on the
+        # final lists. The writer's decisions and action items are two lists, de-duplicated each on its
+        # own; the renderer prints both as "Decision." lines. See tidy_minutes.
+        tidy_minutes.merge_repeats(mom)
+        tidy_minutes.full_owner_names(mom)
+
         # Appendix AD records one ITEM per agenda entry (Ch 6 para 16.7), each ending in its own
         # Decision. The writer returns flat lists, so the grouping is worked out here and passed to the
         # renderer as INDEXES into the very lists it prints — no text crosses back, and a failed or
@@ -218,6 +225,10 @@ def process(job: KafkaJob, c: Clients) -> dict:
         if shortened:
             logger.info(f"[JOB {job.conversation_id}] kept {shortened[1]} of {shortened[0]} discussion "
                         "points, the essence per item")
+        # Figures already said in a point or decision, or no figure at all, go; a few per ITEM remain.
+        # After essence, so it is judged against the points that will actually print.
+        points, figures, decisions = flatten_items(mom)
+        tidy_minutes.trim_figures(mom, points, decisions, figures, mom.get("item_groups"))
 
         docx_bytes = build_mom_docx(mom, meta)
         # Downloaded as "MoM-<the user's file name>.docx", not as its hash — see summary_object_key.
