@@ -146,9 +146,18 @@ def process(job: KafkaJob, c: Clients) -> dict:
         # A second prompt changing minutes this conversation already has takes a different path
         # entirely: no document is read and no minutes are written again. Imported here rather than
         # at the top because minutes_edit imports this module back for the shared pieces.
+        import minutes_edit
         if job.is_edit:
-            import minutes_edit
             return minutes_edit.process(job, c)
+        # A FOLLOW-UP needs no marker: a message on a conversation that already has minutes, carrying the
+        # same document or none, is tried as an edit first ("add tele 9654396200" fills the header instead
+        # of the minutes being written again with the sentence taken for something said in the meeting).
+        # What cannot be done as a change comes back None, and the minutes are written again as before.
+        ack = minutes_edit.follow_up(job, c)
+        if ack is not None:
+            return ack
+        # Written again from the same document: keep the header details the user already gave.
+        so_far = minutes_edit.header_so_far(job, c)
         if not job.prompt and not job.file_urls and not job.file_fids:
             raise ValueError("Nothing to write minutes from: the job has no prompt and no file_urls.")
         documents = _read_documents(job, c)
@@ -167,6 +176,10 @@ def process(job: KafkaJob, c: Clients) -> dict:
         # load() never raises — a bad template costs its details, not the job.
         template = template_details.load(job, c.store)
         meta, from_template = template_details.merge(job.mom_meta, template.details)
+        # What the user gave in earlier messages beats the template; the job's own mom_meta beats both.
+        for k, v in so_far.items():
+            if v and not job.mom_meta.get(k):
+                meta[k] = v
 
         mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
@@ -249,7 +262,8 @@ def process(job: KafkaJob, c: Clients) -> dict:
         minutes_state.save(job, c.store, mom=mom, meta=meta, object_key=key, bucket=bucket,
                            template={"name": template.name, "status": template.status,
                                      "fields": from_template,
-                                     "url": job.template_url if template.fillable else ""})
+                                     "url": job.template_url if template.fillable else ""},
+                           sources=minutes_state.sources_of(job))
         if job.template_url:
             logger.info(f"[JOB {job.conversation_id}] template {template.name!r}: {template.status}"
                         + (f", used {from_template}" if from_template else "")

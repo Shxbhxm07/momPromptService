@@ -165,6 +165,16 @@ the minutes follow the manual and are English.
 ## Editing — a second prompt changes the minutes (built 2026-09-17)
 
 `{"mode": "edit", "conversationId": <the same one>, "prompt": "change the venue to Conference Room B"}`.
+
+**A follow-up needs no marker (2026-09-20).** The IMIR frontend sends every follow-up as a NEW job, with the file
+re-attached and no `mode` — "add tele 9654396200" re-read the PDF, wrote the minutes again, took the sentence for
+something said, and the telephone stayed xxx...xxx. Now `minutes_edit.follow_up`: a message on a conversation that
+already has minutes, carrying the SAME document(s) (`sources` in the saved state: MinIO keys, "fid:<id>") or none,
+is tried as an edit first. If the model answers only "cannot" (not a change to these minutes — "focus more on the
+budget", a question), the minutes are written again as before, KEEPING the header details the user gave earlier
+(`header_so_far`; the job's own mom_meta still wins). A change the guards refuse is answered with the reason, never
+rewritten around the guard. A different document is a new meeting; minutes saved before `sources` existed are
+matched only when the message has no file. No backend change needed; `mode: "edit"` still works.
 No document, no template, no `mom_meta` needed. `mode` is also read as `momMode` / `requestType`, and
 accepts edit | update | revise | modify | change — **confirm the real field name with the backend developer.**
 
@@ -581,6 +591,13 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   time (all six scanned transcripts identical). A PDF with truly nothing now says to re-save it (Print → Save as PDF) or
   send DOCX. **`documents.py` is no longer byte-identical to `~/offline-mom-api/api/utils/documents.py`** — copy it back
   there once, as for docx_export.
+- **Follow-up messages are edits without a marker — 2026-09-20** (see *Editing*). 16 tests played the way the IMIR screen
+  sends them: the same PDF re-attached with "add tele 9654396200" fills the header with no OCR and no writer call and
+  the content untouched; "focus more on the budget" writes the minutes again and keeps that telephone; a different
+  file is a new meeting and carries nothing over; no file at all is an edit; an invented number is refused, not
+  rewritten; undo works; pre-`sources` minutes; an explicit `mode: edit`. The backend still has two optional fixes:
+  a form for header details (sent as mom_meta — exact, classification as a dropdown) and the "null" it puts in
+  front of our file name ("nullMoM-scanned-transcript-05min.docx").
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

@@ -459,15 +459,64 @@ def _fillable_template(state: Dict[str, Any], c: Clients, tag: str) -> Optional[
     return None
 
 
-def process(job: KafkaJob, c: Clients) -> dict:
-    """An edit job → an acknowledgement, exactly like a normal job. Never raises."""
+def _same_minutes(job: KafkaJob, state: Optional[Dict[str, Any]]) -> bool:
+    """Is this message about the minutes in `state` — the same document(s), or none?"""
+    if not state:
+        return False
+    mine, known = set(minutes_state.sources_of(job)), state.get("sources")
+    return not mine or (known is not None and mine <= set(known))
+
+
+def header_so_far(job: KafkaJob, c: Clients) -> Dict[str, Any]:
+    """The header details these minutes already have, when a follow-up has them written AGAIN from the same
+    document ("focus more on the budget"): the telephone or address a user gave in an earlier message must
+    not fall back to xxx...xxx. {} for a different document — a new meeting. Never raises."""
+    try:
+        state = minutes_state.load(job, c.store) if job.conversation_id else None
+        return copy.deepcopy(state.get("meta") or {}) if _same_minutes(job, state) else {}
+    except Exception:
+        return {}
+
+
+def follow_up(job: KafkaJob, c: Clients) -> Optional[dict]:
+    """A message that did not say it is an edit, but is one: this conversation already has minutes, and the
+    message carries the same document(s) or none. Tried as an edit; None when it is not one.
+
+    The IMIR frontend sends every follow-up as a new job, re-attaching the file (seen 2026-09-20: "add tele
+    9654396200" re-read the PDF, wrote the minutes again, and the telephone stayed xxx...xxx). A DIFFERENT
+    document is a new meeting, and so are minutes too old to know what they were written from (saved before
+    `sources` existed) when the message brings a file. Never raises.
+    """
+    try:
+        if not job.prompt.strip() or not job.conversation_id:
+            return None
+        state = minutes_state.load(job, c.store)
+        if not _same_minutes(job, state):
+            return None
+        mine = minutes_state.sources_of(job)
+        logger.info(f"[JOB {job.conversation_id}] a follow-up on the minutes this conversation already has "
+                    f"({'same document' if mine else 'no document'}) — tried as a change first")
+        return process(job, c, follow=True, state=state)
+    except Exception as e:
+        logger.warning(f"[JOB {job.conversation_id}] follow-up check failed ({type(e).__name__}: {e}) — "
+                       "the minutes are written again")
+        return None
+
+
+def process(job: KafkaJob, c: Clients, follow: bool = False,
+            state: Optional[Dict[str, Any]] = None) -> Optional[dict]:
+    """An edit job → an acknowledgement, exactly like a normal job. Never raises.
+
+    `follow`: the job did not say it is an edit (see follow_up). Then an instruction the model cannot turn
+    into a change — "focus more on the budget", a question — returns None, and the caller writes the minutes
+    again. A change the guards refuse is still answered with the reason, never rewritten around the guard."""
     t0 = time.time()
     tag = f"[JOB {job.conversation_id}]"
     try:
         instruction = job.prompt.strip()
         if not instruction:
             raise ValueError("An edit needs a prompt saying what to change.")
-        state = minutes_state.load(job, c.store)
+        state = state or minutes_state.load(job, c.store)
         if not state:
             raise ValueError(f"No minutes to edit for conversation {job.conversation_id!r}. "
                              "Create them first, then send the change.")
@@ -481,6 +530,11 @@ def process(job: KafkaJob, c: Clients) -> dict:
         changes = data.get("changes") if isinstance(data.get("changes"), list) else []
         logger.info(f"{tag} edit: {len(changes)} change(s) proposed for {instruction[:70]!r}")
         done, refused, undo = apply(mom, meta, changes, instruction)
+        if follow and not done and not undo and all(
+                isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
+            logger.info(f"{tag} not a change to the minutes ({refused[0] if refused else 'no change proposed'}) — "
+                        "writing them again from the document")
+            return None
 
         if undo:
             if not history:
@@ -513,7 +567,7 @@ def process(job: KafkaJob, c: Clients) -> dict:
         history.append(minutes_state.snapshot(state))
         if not minutes_state.save(job, c.store, mom=mom, meta=meta, template=state.get("template") or {},
                                   object_key=key, bucket=bucket, instruction=instruction, changes=done,
-                                  history=history):
+                                  history=history, sources=state.get("sources")):
             # For a new job a lost state only costs the NEXT edit; for an edit it IS the edit.
             raise ValueError("The change could not be saved to file storage, so it was not made. "
                              "Send it again.")

@@ -37,9 +37,16 @@ def key_for(job: KafkaJob) -> str:
     return summary_object_key(job, ident, ext="json", folder="minutes-state")
 
 
+def sources_of(job: KafkaJob) -> List[str]:
+    """What the minutes were written from: the MinIO keys of the files, and repository ids as "fid:<id>".
+    A later message on the same conversation carrying these (or nothing) is about THESE minutes."""
+    return sorted({u.strip() for u in job.file_urls if str(u).strip()}
+                  | {f"fid:{f}" for f in job.file_fids if str(f).strip()})
+
+
 def save(job: KafkaJob, store, *, mom: Dict[str, Any], meta: Dict[str, Any], template: Dict[str, Any],
          object_key: str, bucket: str, instruction: str = "", changes: Optional[List[str]] = None,
-         history: Optional[List[Dict[str, Any]]] = None) -> bool:
+         history: Optional[List[Dict[str, Any]]] = None, sources: Optional[List[str]] = None) -> bool:
     """Write the state for this conversation. Returns whether it was stored; never raises."""
     state = {
         "schema": SCHEMA,
@@ -53,6 +60,8 @@ def save(job: KafkaJob, store, *, mom: Dict[str, Any], meta: Dict[str, Any], tem
         "instruction": instruction,
         "changes": changes or [],
         "history": (history or [])[-MAX_HISTORY:],
+        # The documents these minutes came from — how a follow-up message is recognised (minutes_edit).
+        "sources": sorted(sources or []),
     }
     try:
         store.upload(key_for(job), json.dumps(state).encode("utf-8"), "application/json")
