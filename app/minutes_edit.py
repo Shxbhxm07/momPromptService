@@ -77,15 +77,20 @@ Operations:
                issue_date   : the date after "dt" beside the file reference
 - set_title  : change the meeting's title
 - delete     : remove one line.              list + index + quote
-- replace    : reword one line.              list + index + quote + value
-- add        : add one new line at the end.  list + value (for action_items also owner and due)
+- replace    : reword one line.              list + index + quote + value (for an attendee: value = the new name)
+- add        : add one new line at the end.  list + value
+               attendees    : value = the person's name, role = their role
+               action_items : value = the task, owner and due when given
 - set_owner  : set who owns an action and when it is due. list = action_items, index + quote + owner + due
-- set_role   : set an attendee's role.       list = attendees, index + quote + value (e.g. Chairman, Secretary)
+- set_role   : set an attendee's role.       list = attendees, index + quote + role (e.g. Chairman, Secretary)
 - undo       : undo the LAST change to these minutes (may come with other changes: they apply after it)
 - cannot     : the instruction cannot be done as a change; say why in value
 
 Rules:
 - Use ONLY words the user gave you or that are already in the minutes. Never invent a name, a date or a number.
+- value, role, owner and due each hold only their own text. The [role: …], [owner: …] and [due: …] after a line
+  show how the minutes are laid out: never copy them into value. Adding "Teena as an intern in AI" is
+  value "Teena", role "intern in AI".
 - A header field showing xxx...xxx was never provided: fill it when the user gives it, in the user's words.
 - classification: only when the HEADER shows xxx...xxx for it, and only the grade the user wrote (RESTRICTED,
   CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED). A classification already set cannot be changed here;
@@ -100,7 +105,7 @@ _SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["changes"],
     "properties": {"changes": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["op", "list", "index", "quote", "field", "value", "owner", "due"],
+        "required": ["op", "list", "index", "quote", "field", "value", "role", "owner", "due"],
         "properties": {
             "op": {"type": "string", "enum": ["set_meta", "set_title", "delete", "replace", "add",
                                               "set_owner", "set_role", "undo", "cannot"]},
@@ -109,6 +114,7 @@ _SCHEMA = {
             "quote": {"type": "string"},
             "field": {"type": "string"},
             "value": {"type": "string"},
+            "role": {"type": "string"},
             "owner": {"type": "string"},
             "due": {"type": "string"},
         }}}},
@@ -183,11 +189,17 @@ def _earlier(state: Dict[str, Any], keep: int = 5) -> str:
     return "\n".join(lines[-keep:])
 
 
-def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: str = "") -> Dict[str, Any]:
+def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: str = "",
+         refused: str = "") -> Dict[str, Any]:
+    """The model's changes for `instruction`. `refused`: its previous answer and why the checks refused it,
+    for the one second try (process)."""
     from mom import _get_writer
     before = f"EARLIER REQUESTS (oldest first):\n{earlier}\n\n" if earlier else ""
+    after = (f"\n\nYOUR PREVIOUS ANSWER WAS REFUSED BY THE CHECKS:\n{refused}\nAnswer again with the complete, "
+             "corrected list of changes for the INSTRUCTION, following every rule. If it cannot be done within "
+             "the rules, answer cannot.") if refused else ""
     reply = _get_writer().generate(
-        _SYSTEM, f"MINUTES:\n{_shown(mom, meta)}\n\n{before}INSTRUCTION:\n{instruction}",
+        _SYSTEM, f"MINUTES:\n{_shown(mom, meta)}\n\n{before}INSTRUCTION:\n{instruction}{after}",
         max_new_tokens=MAX_REPLY_TOKENS, temperature=0.0,
         extra={"response_format": {"type": "json_schema",
                                    "json_schema": {"name": "minute_changes", "schema": _SCHEMA,
@@ -317,6 +329,29 @@ def _said(value: str, *sources: str) -> bool:
     return v.strip() == "" or any(v in _plain(src) for src in sources)
 
 
+_LABEL = re.compile(r"\s*\[(role|owner|due):\s*([^\]]*)\]", re.I)
+_NONE = {"", "—", "-", "none", "n/a"}
+
+
+def _labels(ch: Dict[str, Any]) -> Dict[str, Any]:
+    """The change with any "[role: …]", "[owner: …]", "[due: …]" moved out of its value into its own field.
+
+    Those labels are how `_line_of` SHOWS a line to the model, and it copies them back: "Teena [role: Intern
+    in AI]" was refused as a name the user never gave, and "Shubham Pandey [role: Team Leader of AI]" as a
+    rename the user never wrote (cluster, 2026-09-19/21). A label is ours, not an invented detail; what it
+    carries is still checked like any other value. A field the model did fill wins over a label."""
+    value = _flat(ch.get("value"))
+    found = _LABEL.findall(value)
+    if not found:
+        return ch
+    out = dict(ch, value=_flat(_LABEL.sub(" ", value)))
+    for key, text in found:
+        key, text = key.lower(), _flat(text)
+        if text.lower() not in _NONE and not _flat(out.get(key)):
+            out[key] = text
+    return out
+
+
 def _find_line(items: List[Any], idx: int, quote: str) -> Tuple[int, str]:
     """(index, "") of the line a change is about, or (-1, why not).
 
@@ -351,10 +386,12 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
     for ch in changes[:MAX_CHANGES]:
         if not isinstance(ch, dict):
             continue
+        ch = _labels(ch)
         op, name = _flat(ch.get("op")), _flat(ch.get("list"))
         idx = ch.get("index") if isinstance(ch.get("index"), int) else -1
         value, quote = _flat(ch.get("value")), _flat(ch.get("quote"))
         owner, due, field = _flat(ch.get("owner")), _flat(ch.get("due")), _flat(ch.get("field"))
+        role = _flat(ch.get("role"))
 
         if op == "undo":
             undo = True
@@ -418,7 +455,9 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
         if op == "add":
             if not value:
                 continue
-            bad = _unsupported(" ".join([value, owner, due]), allowed)
+            if name == "attendees":                 # the role of a new attendee: `role` (older answers: `owner`)
+                role, owner = role or owner, ""
+            bad = _unsupported(" ".join([value, role, owner, due]), allowed)
             if bad:
                 refused.append(f"new {name[:-1]}: mentions {', '.join(bad)}, which you did not give")
                 continue
@@ -426,16 +465,19 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             if name == "attendees" and not _said(value, instruction, earlier):
                 refused.append(f"new attendee {value!r}: not a name you gave")
                 continue
+            if name == "attendees" and role and not _said(role, instruction, earlier):
+                refused.append(f"new attendee {value}: the role {role!r} is not what you wrote")
+                continue
             if owner and not _said(owner, instruction, earlier, people):
                 refused.append(f"{owner!r}: not a name you gave or one at the meeting")
                 continue
             if name == "action_items":
                 items.append({"task": value, "assigned_to": owner, "assigned_by": "", "due": due})
             elif name == "attendees":
-                items.append({"name": value, "role": owner})
+                items.append({"name": value, "role": role})
             else:
                 items.append(value)
-            done.append(f"added to {name}: {value[:60]}")
+            done.append(f"added to {name}: {value[:60]}" + (f" ({role})" if name == "attendees" and role else ""))
             continue
 
         idx, why = _find_line(items, idx, quote)
@@ -448,25 +490,33 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
             to_delete[name].add(idx)
             done.append(f"removed from {name}: {line[:60]}")
         elif op in ("replace", "set_role", "set_owner"):
-            bad = _unsupported(" ".join([value, owner, due]), allowed)
+            bad = _unsupported(" ".join([value, role, owner, due]), allowed)
             if bad:
                 refused.append(f"{op} {name} {idx}: mentions {', '.join(bad)}, which you did not give")
                 continue
+            if op == "set_role":                    # the new role: `role` (older answers: `value` or `owner`)
+                role = role or value or owner
+            elif name == "attendees" and isinstance(items[idx], dict) and _plain(role) == _plain(items[idx].get("role")):
+                role = ""                           # the role the line already has, carried along: no change
             # A role, an owner or a person's name must be the user's own phrase (or an earlier value being
-            # put back); an owner may also be anyone already on the attendee list.
+            # put back); an owner may also be anyone already on the attendee list. Name and role are checked
+            # each on its own: together they are never a phrase the user wrote.
             people = " ; ".join(_flat(a.get("name")) for a in (mom.get("attendees") or []) if isinstance(a, dict))
-            label = (value or owner) if op == "set_role" else value if (op == "replace" and name == "attendees") else ""
-            if label and not _said(label, instruction, earlier):
-                refused.append(f"{op} {name}: {label!r} is not what you wrote")
+            name_given = value if (op == "replace" and name == "attendees") else ""
+            if name_given and not _said(name_given, instruction, earlier):
+                refused.append(f"{op} {name}: {name_given!r} is not what you wrote")
+                continue
+            if name == "attendees" and role and not _said(role, instruction, earlier):
+                refused.append(f"{op} {name}: the role {role!r} is not what you wrote")
                 continue
             if op == "set_owner" and owner and not _said(owner, instruction, earlier, people):
                 refused.append(f"set_owner: {owner!r} is not a name you gave or one at the meeting")
                 continue
-            if op == "set_role":
+            if op == "set_role" or (op == "replace" and name == "attendees" and role and not value):
                 entry = items[idx] if isinstance(items[idx], dict) else {"name": _flat(items[idx])}
                 was = _flat(entry.get("role")) or "none"
-                items[idx] = {**entry, "role": value or owner}
-                done.append(f"{_flat(items[idx].get('name'))}: role {was} → {value or owner}")
+                items[idx] = {**entry, "role": role}
+                done.append(f"{_flat(items[idx].get('name'))}: role {was} → {role}")
             elif op == "set_owner" and isinstance(items[idx], dict):
                 was = _flat(items[idx].get("assigned_to")) or "none"
                 items[idx] = {**items[idx], "assigned_to": owner or items[idx].get("assigned_to", ""),
@@ -478,10 +528,12 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
                     inner = "task" if "task" in items[idx] else "name"
                     was = _flat(items[idx].get(inner))
                     items[idx] = {**items[idx], inner: value}
+                    if inner == "name" and role:
+                        items[idx]["role"] = role
                 else:
                     was = _flat(items[idx])
                     items[idx] = value
-                done.append(f"{name}: '{was[:60]}' → '{value[:60]}'")
+                done.append(f"{name}: '{was[:60]}' → '{value[:60]}'" + (f" ({role})" if name == "attendees" and role else ""))
             else:
                 refused.append(f"{op} {name} {idx}: nothing to change")
 
@@ -607,12 +659,32 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             meta = copy.deepcopy(previous.get("meta") or {})
             before = copy.deepcopy(mom)
             changes = [ch for ch in changes if not (isinstance(ch, dict) and ch.get("op") == "undo")]
+        base_meta = copy.deepcopy(meta)
         done, refused, _ = apply(mom, meta, changes, instruction, earlier)
         if follow and not done and not undo and all(
                 isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
             logger.info(f"{tag} not a change to the minutes ({refused[0] if refused else 'no change proposed'}) — "
                         "writing them again from the document")
             return None
+
+        # ONE SECOND TRY when a check refused a change: the model is shown its answer and the reasons, the way
+        # validation libraries re-ask (Instructor's "reask"), and its new answer passes the SAME checks — the
+        # guards are never loosened, the model only gets to put the user's words in the right fields. One
+        # extra call (~2 s), only after a refusal. The better of the two answers is kept.
+        cannots = sum(1 for ch in changes if isinstance(ch, dict) and ch.get("op") == "cannot")
+        if len(refused) > cannots:
+            shown = [{k: v for k, v in ch.items() if v not in ("", -1, None)} for ch in changes if isinstance(ch, dict)]
+            why = f"{json.dumps(shown, ensure_ascii=False)}\nRefused:\n" + "\n".join(f"- {r}" for r in refused)
+            again = _ask(before, base_meta, instruction, earlier, refused=why)
+            retry = [ch for ch in (again.get("changes") if isinstance(again.get("changes"), list) else [])
+                     if isinstance(ch, dict) and ch.get("op") != "undo"]       # an undo is already applied
+            mom2, meta2 = copy.deepcopy(before), copy.deepcopy(base_meta)
+            done2, refused2, _ = apply(mom2, meta2, retry, instruction, earlier)
+            better = len(done2) > len(done)
+            logger.info(f"{tag} second try after {len(refused) - cannots} refusal(s): {len(done2)} change(s) made, "
+                        f"{len(refused2)} refused — {'used' if better else 'first answer kept'}")
+            if better:
+                mom, meta, done, refused = mom2, meta2, done2, refused2
 
         if not done and not undo:
             reason = refused[0] if refused else "nothing in the minutes matched that instruction"

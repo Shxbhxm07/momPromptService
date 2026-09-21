@@ -610,6 +610,18 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   (or an earlier value being put back; an owner may be anyone on the attendee list) — word by word, "Garrison
   Commander" had passed, built from two other roles. The session replayed with a stand-in making the real model's
   mistakes: 11 checks pass; every earlier suite passes. Whether the real model now reads "his" right is for the cluster.
+- **Re-prompts refused because the model copied our own labels — fixed 2026-09-21.** "add Teena as an intern in AI"
+  → refused "new attendee 'Teena [role: Intern in AI]': not a name you gave"; "Update Col. Ariz Khan name to Shubham
+  Pandey" → refused "'Shubham Pandey [role: Team Leader of AI]' is not what you wrote". Both times the model copied
+  the `[role: …]` label that `_line_of` SHOWS it into the new name, and the phrase guard (rightly) found no such
+  phrase in the user's words. There was also no field for a new attendee's role (it went in `owner`). Fixed in three
+  layers, the guards untouched: (1) the answer schema has its own `role` field and the prompt says labels never go
+  in `value` (a separate field per fact, OpenAI's "use enums and object structure"); (2) `_labels` moves any
+  `[role:|owner:|due: …]` the model still copies into its own field, and each is checked on its own — name, role,
+  owner, due; (3) after a guard refusal the model is asked ONCE more with its answer and the reasons (Instructor's
+  "reask" pattern), the new answer passes the same guards, and the one that does more is kept. 29 tests: both
+  real answers now apply, invented surnames/roles/dates are still refused, one call when right first time, never a
+  retry after "cannot".
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in
