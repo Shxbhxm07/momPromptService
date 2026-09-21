@@ -645,6 +645,19 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   "I could not tell who 'his' means. Please write the person's name." — asked, never guessed. The same rule for every
   pronoun; nothing is inferred from a name. Changes not about a person ("their office number" → telephone) are left
   alone. 21 tests; the 29 re-prompt and 24 question tests still pass.
+- **Typos and log-like replies — fixed 2026-09-21.** (1) "add his position as an AI engineeg" printed "AI engineeg":
+  the model obeyed "use only the user's words", and the phrase guard would have refused "engineer" anyway. Code does
+  NOT correct spelling by itself — measured on the image's wordlist, one letter off turns names typed in lower case
+  into words (pandey → pander, karan → karat, mohan → moan, manoj → manor, jawans → japans). Instead the prompt lets
+  the model correct obvious spelling in ordinary words, and `_spelling` accepts a correction only when the typed word
+  is in no dictionary (`/usr/share/dict/american-english`, lower-case entries) and not in the minutes, and the new
+  word is a lower-case dictionary word exactly one letter away (dropped, added, changed, or two swapped). Never in a
+  person's name or an owner; numbers are never touched. The reply says `(spelling corrected: "engineeg" →
+  "engineer")`. A typo the model copies is kept as typed. (2) Replies are plain sentences: "Done. Ariz Khan is now
+  Shubham Pandey.", "Done. Shubham Pandey's role is now AI engineer (was Team Leader in AI).", "Done. X. Not done:
+  Y.", "Nothing was changed. I did not add 'Col. Varma': that name is not in your message." Old values stay in
+  every sentence ("(was …)"), because EARLIER REQUESTS needs them to set something back. 26 tests; the 29 + 24 + 21
+  earlier ones and the 38 layout rules pass.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

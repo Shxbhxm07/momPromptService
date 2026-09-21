@@ -92,6 +92,8 @@ Operations:
 
 Rules:
 - Use ONLY words the user gave you or that are already in the minutes. Never invent a name, a date or a number.
+- Correct obvious spelling mistakes in ordinary English words the user typed ("engineeg" → "engineer",
+  "maintenence" → "maintenance"). Never change how a name, a place, a rank or an abbreviation is spelt.
 - value, role, owner and due each hold only their own text. The [role: …], [owner: …] and [due: …] after a line
   show how the minutes are laid out: never copy them into value. Adding "Teena as an intern in AI" is
   value "Teena", role "intern in AI".
@@ -185,11 +187,16 @@ def _shown(mom: Dict[str, Any], meta: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _sentence(text: Any) -> str:
+    t = _flat(text)
+    return t if t.endswith((".", "!", "?")) else f"{t}."
+
+
 def _earlier(state: Dict[str, Any], keep: int = 5) -> str:
     """The user's previous requests on these minutes and what each did, oldest first — without them "update
     his position" reached the model alone, and it changed the wrong person (seen 2026-09-20)."""
     steps = [h for h in (state.get("history") or []) if isinstance(h, dict)] + [state]
-    lines = [f'- "{_flat(h.get("instruction"))[:160]}" → {"; ".join(h.get("changes") or []) or "nothing changed"}'
+    lines = [f'- "{_flat(h.get("instruction"))[:160]}" → {" ".join(_sentence(c) for c in h.get("changes") or []) or "nothing changed"}'
              for h in steps if _flat(h.get("instruction"))]
     return "\n".join(lines[-keep:])
 
@@ -254,7 +261,7 @@ def _resolve_pronoun(changes: List[Any], mom: Dict[str, Any], pronoun: str, last
         return changes
     attendees = mom.get("attendees") or []
     if not 0 <= last < len(attendees) or not isinstance(attendees[last], dict):
-        raise ValueError(f"No change was made: I could not tell who {pronoun!r} means. Please write the "
+        raise ValueError(f"Nothing was changed. I could not tell who {pronoun!r} means. Please write the "
                          "person's name.")
     person = attendees[last]
     name = _flat(person.get("name"))
@@ -461,23 +468,108 @@ def _find_line(items: List[Any], idx: int, quote: str) -> Tuple[int, str]:
     if 0 <= idx < len(items) and _quote_matches(quote, _line_of(items[idx])):
         return idx, ""
     if len(_normalise(quote)) < MIN_QUOTE:
-        return -1, f"the quote {quote!r} is too short to tell which line is meant"
+        return -1, f"the words quoted, {quote!r}, are too few to tell"
     hits = [i for i, v in enumerate(items) if _quote_matches(quote, _line_of(v))]
     if len(hits) == 1:
         logger.info(f"quote {quote[:40]!r} names line {hits[0]}, not {idx} — the quoted line is changed")
         return hits[0], ""
-    return -1, "the quoted text matches no line" if not hits else "the quoted text matches several lines"
+    return -1, "no line has the words quoted" if not hits else "several lines have the words quoted"
+
+
+# ── plain replies (2026-09-21: "attendees: 'Ariz Khan' → 'Shubham Pandey'" read like a log line) ──────────
+_NOUN = {"key_points": "point", "decisions": "decision", "action_items": "action", "agenda": "agenda item",
+         "attendees": "attendee", "key_figures": "figure"}
+_FIELD = {"venue": "venue", "meeting_date": "meeting date", "meeting_time": "meeting time", "telephone": "telephone",
+          "address": "address", "file_ref": "file reference", "issue_date": "date of issue", "precedence": "precedence",
+          "copy_no": "copy number", "classification": "classification", "amendments_by": "amendments date",
+          "secretary_name": "secretary's name", "secretary_rank": "secretary's rank", "distribution": "distribution"}
+
+
+def _q(text: Any, most: int = 80) -> str:
+    t = _flat(text)
+    return f'"{t[:most]}…"' if len(t) > most else f'"{t}"'
+
+
+def _meta_text(meta: Dict[str, Any], field: str) -> str:
+    """A header field as the reply shows it — also its OLD value, which the next prompt needs to set it back."""
+    if field.startswith("secretary_"):
+        sec = meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {}
+        return _flat(sec.get(field.split("_", 1)[1]))
+    if field == "address":
+        v = meta.get("address")
+        return ", ".join(_flat(a) for a in v) if isinstance(v, list) else _flat(v)
+    if field == "distribution":
+        return _rows(meta)
+    return _flat(meta.get(field))
+
+
+# ── spelling: the model may correct a word the user misspelt, and code checks it is only that ──────────
+# "add his position as an AI engineeg" printed "AI engineeg" (2026-09-21): the model obeyed "use only the user's
+# words". Code does NOT correct by itself — measured on the image's wordlist, one letter off would turn names
+# typed in lower case into words: pandey → pander, karan → karat, mohan → moan, manoj → manor, jawans → japans.
+# The model knows a name from a typo; code checks that its correction is one, nothing more.
+_WORDLIST = "/usr/share/dict/american-english"      # the `wamerican` package, already in the image
+_WORDS: Optional[set] = None
+_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+
+def _dictionary() -> set:
+    global _WORDS
+    if _WORDS is None:
+        try:
+            with open(_WORDLIST, encoding="utf-8", errors="ignore") as f:
+                _WORDS = {w for w in (x.strip() for x in f) if w.isalpha() and w.islower()}
+        except OSError:
+            _WORDS = set()
+            logger.warning(f"no English wordlist at {_WORDLIST} — spelling corrections in re-prompts are refused")
+    return _WORDS
+
+
+def _one_off(word: str) -> set:
+    """Every string one letter away: one dropped, two side by side swapped, one changed, one added."""
+    splits = [(word[:i], word[i:]) for i in range(len(word) + 1)]
+    return ({a + b[1:] for a, b in splits if b} | {a + b[1] + b[0] + b[2:] for a, b in splits if len(b) > 1}
+            | {a + c + b[1:] for a, b in splits if b for c in _LETTERS} | {a + c + b for a, b in splits for c in _LETTERS})
+
+
+def _spelling(new_text: str, instruction: str, vocab: set) -> List[Tuple[str, str]]:
+    """(typed, corrected) for each word of `new_text` that corrects a word the user misspelt: the typed word is
+    in no dictionary and not in the minutes (so not a word of this meeting, like "bowsers"), and the corrected
+    one is an ordinary lower-case English word one letter away. Anything else is not a correction and meets the
+    guards as it stands."""
+    words = _dictionary()
+    said = set(re.findall(r"[a-z]+", instruction.lower()))
+    typed = [w for w in said if len(w) >= 4 and w not in words and w not in vocab]
+    if not words or not typed:
+        return []
+    out = []
+    for v in dict.fromkeys(re.findall(r"[a-z]+", new_text.lower())):
+        if v in said or v not in words:
+            continue
+        for t in typed:
+            if v in _one_off(t):
+                out.append((t, v))
+                break
+    return out
+
+
+def _with_fixes(instruction: str, fixes: List[Tuple[str, str]]) -> str:
+    for typed, fixed in fixes:
+        instruction = re.sub(rf"\b{re.escape(typed)}\b", fixed, instruction, flags=re.I)
+    return instruction
 
 
 def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any]],
           instruction: str, earlier: str = "") -> Tuple[List[str], List[str], bool]:
-    """Change `mom` and `meta` in place. Returns (what was done, what was refused, undo asked).
+    """Change `mom` and `meta` in place. Returns (what was done, what was refused, undo asked) — each a plain
+    sentence for the user, without its full stop.
 
     `earlier` is the user's previous requests and what they changed (with old values), so a revert to a
     value no longer in the minutes counts as the user's own words, not an invention."""
     done: List[str] = []
     refused: List[str] = []
     allowed = _allowed_text(mom, meta, instruction) + " " + earlier
+    vocab = set(re.findall(r"[a-z]+", _allowed_text(mom, meta, "").lower()))
     undo = False
     # Deletions are collected and applied at the end: removing as we go would shift every later index.
     to_delete: Dict[str, set] = {name: set() for name in LISTS}
@@ -491,21 +583,32 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
         value, quote = _flat(ch.get("value")), _flat(ch.get("quote"))
         owner, due, field = _flat(ch.get("owner")), _flat(ch.get("due")), _flat(ch.get("field"))
         role = _flat(ch.get("role"))
+        noun = _NOUN.get(name, "line")
+
+        # Spelling corrections are accepted in text, roles and header details — never in a person's name or
+        # an owner, which stay exactly as the user wrote them.
+        is_name = (name == "attendees" and op in ("add", "replace")) or op in ("delete", "set_owner", "undo", "cannot")
+        fixes = _spelling(" ".join([role] + ([] if is_name else [value])), instruction, vocab)
+        typed = _with_fixes(instruction, fixes)           # the instruction as the user meant it
+        checked = allowed + " " + typed if fixes else allowed
+        note = "".join(f' (spelling corrected: "{t}" → "{v}")' for t, v in fixes)
 
         if op == "undo":
             undo = True
             continue
         if op == "cannot":
-            refused.append(value or "the instruction cannot be done as a change to these minutes")
+            refused.append(value or "That cannot be done as a change to these minutes")
             continue
         if op == "set_meta":
+            label = _FIELD.get(field, field or "that detail")
             if field not in EDITABLE_META:
-                refused.append(f"{field or 'that header field'} cannot be changed from a prompt")
+                refused.append(f"The {label} cannot be changed from the chat")
                 continue
-            bad = _unsupported(value, allowed, every_word=True)
+            bad = _unsupported(value, checked, every_word=True)
             if bad:
-                refused.append(f"{field}: {value!r} mentions {', '.join(bad)}, which you did not give")
+                refused.append(f"I did not set the {label}: {', '.join(bad)} is not in your message")
                 continue
+            was = _meta_text(meta, field)
             if field == "classification":
                 why = _classification_refused(meta, value, instruction)
                 if why:
@@ -529,69 +632,76 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
                     if bits[0]:
                         rows.append({"addressee": bits[0], "copies": bits[1], "remarks": bits[2]})
                 if not rows:
-                    refused.append("distribution: no addressee given")
+                    refused.append("No addressee was given for the distribution")
                     continue
                 meta["distribution"] = rows
             elif field == "precedence":
                 meta["precedence"] = value.upper()
             else:
                 meta[field] = value
-            done.append(f"{field} → {value}")
+            now = _meta_text(meta, field)
+            done.append(f"The {label} is now {now}" + (f" (was {was})" if was and was != now else "") + note)
             continue
         if op == "set_title":
-            bad = _unsupported(value, allowed)
+            bad = _unsupported(value, checked)
             if bad:
-                refused.append(f"the new title mentions {', '.join(bad)}, which you did not give")
+                refused.append(f"I did not change the title: {', '.join(bad)} is not in your message")
                 continue
+            was = _flat(mom.get("title"))
             mom["title"] = value
-            done.append(f"title → {value}")
+            done.append(f"The title is now {_q(value, 200)}" + (f" (was {_q(was, 200)})" if was else "") + note)
             continue
 
         items = mom.get(name)
         if name not in LISTS or not isinstance(items, list):
-            refused.append(f"{op}: {name or 'that list'} is not part of the minutes")
+            refused.append(f"I could not find {name or 'that part'} in these minutes")
             continue
         if op == "add":
             if not value:
                 continue
             if name == "attendees":                 # the role of a new attendee: `role` (older answers: `owner`)
                 role, owner = role or owner, ""
-            bad = _unsupported(" ".join([value, role, owner, due]), allowed)
+            bad = _unsupported(" ".join([value, role, owner, due]), checked)
             if bad:
-                refused.append(f"new {name[:-1]}: mentions {', '.join(bad)}, which you did not give")
+                refused.append(f"I did not add the {noun}: {', '.join(bad)} is not in your message")
                 continue
             people = " ; ".join(_flat(a.get("name")) for a in (mom.get("attendees") or []) if isinstance(a, dict))
             if name == "attendees" and not _said(value, instruction, earlier):
-                refused.append(f"new attendee {value!r}: not a name you gave")
+                refused.append(f"I did not add {value!r}: that name is not in your message")
                 continue
-            if name == "attendees" and role and not _said(role, instruction, earlier):
-                refused.append(f"new attendee {value}: the role {role!r} is not what you wrote")
+            if name == "attendees" and role and not _said(role, instruction, typed, earlier):
+                refused.append(f"I did not add {value}: the role {role!r} is not in your message")
                 continue
             if owner and not _said(owner, instruction, earlier, people):
-                refused.append(f"{owner!r}: not a name you gave or one at the meeting")
+                refused.append(f"I did not set the owner: {owner!r} is not in your message or on the attendee list")
                 continue
             if name == "action_items":
                 items.append({"task": value, "assigned_to": owner, "assigned_by": "", "due": due})
+                done.append(f"Added the action {_q(value)}" + (f", owner {owner}" if owner else "")
+                            + (f", due {due}" if due else "") + note)
             elif name == "attendees":
                 items.append({"name": value, "role": role})
+                done.append(f"Added {value} to the attendees" + (f" as {role}" if role else "") + note)
             else:
                 items.append(value)
-            done.append(f"added to {name}: {value[:60]}" + (f" ({role})" if name == "attendees" and role else ""))
+                done.append(f"Added the {noun} {_q(value)}" + note)
             continue
 
         idx, why = _find_line(items, idx, quote)
         if idx < 0:
-            refused.append(f"{op} {name}: {why}")
+            refused.append(f"I could not tell which {noun} you mean ({why})")
             logger.info(f"{op} {name}: {why} — change skipped")
             continue
         line = _line_of(items[idx])
+        person = _flat(items[idx].get("name")) if isinstance(items[idx], dict) else _flat(items[idx])
         if op == "delete":
             to_delete[name].add(idx)
-            done.append(f"removed from {name}: {line[:60]}")
+            done.append(f"Removed {person} from the attendees" if name == "attendees"
+                        else f"Removed the {noun} {_q(line)}")
         elif op in ("replace", "set_role", "set_owner"):
-            bad = _unsupported(" ".join([value, role, owner, due]), allowed)
+            bad = _unsupported(" ".join([value, role, owner, due]), checked)
             if bad:
-                refused.append(f"{op} {name} {idx}: mentions {', '.join(bad)}, which you did not give")
+                refused.append(f"I did not change the {noun}: {', '.join(bad)} is not in your message")
                 continue
             if op == "set_role":                    # the new role: `role` (older answers: `value` or `owner`)
                 role = role or value or owner
@@ -599,29 +709,35 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
                 role = ""                           # the role the line already has, carried along: no change
             # A role, an owner or a person's name must be the user's own phrase (or an earlier value being
             # put back); an owner may also be anyone already on the attendee list. Name and role are checked
-            # each on its own: together they are never a phrase the user wrote.
+            # each on its own: together they are never a phrase the user wrote. A role may carry a spelling
+            # correction (`typed`); a name never does.
             people = " ; ".join(_flat(a.get("name")) for a in (mom.get("attendees") or []) if isinstance(a, dict))
             name_given = value if (op == "replace" and name == "attendees") else ""
             if name_given and not _said(name_given, instruction, earlier):
-                refused.append(f"{op} {name}: {name_given!r} is not what you wrote")
+                refused.append(f"I did not rename {person}: {name_given!r} is not in your message")
                 continue
-            if name == "attendees" and role and not _said(role, instruction, earlier):
-                refused.append(f"{op} {name}: the role {role!r} is not what you wrote")
+            if name == "attendees" and role and not _said(role, instruction, typed, earlier):
+                refused.append(f"I did not change the role: {role!r} is not in your message")
                 continue
             if op == "set_owner" and owner and not _said(owner, instruction, earlier, people):
-                refused.append(f"set_owner: {owner!r} is not a name you gave or one at the meeting")
+                refused.append(f"I did not set the owner: {owner!r} is not in your message or on the attendee list")
                 continue
             if op == "set_role" or (op == "replace" and name == "attendees" and role and not value):
                 entry = items[idx] if isinstance(items[idx], dict) else {"name": _flat(items[idx])}
-                was = _flat(entry.get("role")) or "none"
+                was = _flat(entry.get("role"))
                 items[idx] = {**entry, "role": role}
-                done.append(f"{_flat(items[idx].get('name'))}: role {was} → {role}")
+                done.append(f"{_flat(items[idx].get('name'))}'s role is now {role}"
+                            + (f" (was {was})" if was else "") + note)
             elif op == "set_owner" and isinstance(items[idx], dict):
-                was = _flat(items[idx].get("assigned_to")) or "none"
+                was = _flat(items[idx].get("assigned_to"))
                 items[idx] = {**items[idx], "assigned_to": owner or items[idx].get("assigned_to", ""),
                               "due": due or items[idx].get("due", "")}
-                done.append(f"owner of '{_flat(items[idx].get('task'))[:50]}': {was} → {owner or '(unchanged)'}"
-                            + (f", due {due}" if due else ""))
+                task = _q(items[idx].get("task"), 60)
+                if owner:
+                    done.append(f"The action {task} is now owned by {owner}" + (f" (was {was})" if was else "")
+                                + (f", due {due}" if due else ""))
+                else:
+                    done.append(f"The action {task} is now due {due}")
             elif op == "replace" and value:
                 if isinstance(items[idx], dict):
                     inner = "task" if "task" in items[idx] else "name"
@@ -632,9 +748,10 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
                 else:
                     was = _flat(items[idx])
                     items[idx] = value
-                done.append(f"{name}: '{was[:60]}' → '{value[:60]}'" + (f" ({role})" if name == "attendees" and role else ""))
+                done.append((f"{was} is now {value}" + (f", role {role}" if role else "") if name == "attendees"
+                             else f"Changed the {noun} {_q(was, 60)} to {_q(value, 60)}") + note)
             else:
-                refused.append(f"{op} {name} {idx}: nothing to change")
+                refused.append(f"There was nothing to change in that {noun}")
 
     for name, drop in to_delete.items():
         if drop:
@@ -817,15 +934,15 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
                 mom, meta, done, refused = mom2, meta2, done2, refused2
 
         if not done and not undo:
-            reason = refused[0] if refused else "nothing in the minutes matched that instruction"
-            raise ValueError(f"No change was made: {reason}.")
+            reason = refused[0] if refused else "I could not find anything in the minutes that matches your message"
+            raise ValueError(f"Nothing was changed. {reason}.")
         base = previous["mom"] if undo else state["mom"]
         if done:
             groups = base.get("item_groups")
             if isinstance(groups, list) and groups:
                 mom["item_groups"] = _regroup(groups, before, mom)
         if undo:
-            done = ["undid the previous change"] + done
+            done = ["Undid the last change"] + done
 
         # THE STATE IS SAVED LAST — it is what the next prompt edits, so it may change only once everything
         # that can fail has succeeded. Saved first (as until 2026-09-20), an Elasticsearch outage after it
@@ -854,11 +971,11 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         for line in refused:
             logger.info(f"{tag}   ✗ {line}")
         logger.info(f"{tag} edited in {time.time()-t0:.0f}s — {bucket}/{key}")
-        said = "; ".join(done)
+        said = "Done. " + " ".join(f"{d}." for d in done)
         if refused:
-            said += f". Not done: {refused[0]}"
+            said += f" Not done: {refused[0]}."
         if answer:
-            said += f". {answer}"
+            said += f" {answer}"
         return build_ack(job, success=True, bucket=bucket, object_key=key, description=said,
                          limit=ANSWER_CHARS if answer else None)
     except Exception as e:
