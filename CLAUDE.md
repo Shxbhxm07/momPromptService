@@ -634,6 +634,17 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   (`minutes_edit.previous_state`), records itself as an earlier request, and — when the replaced minutes had edits —
   the reply starts "Written again from the document; your earlier changes are not in it. Send "undo" to get them
   back." 24 tests replaying the session; the 29 re-prompt tests and the 38 layout rules pass.
+- **"his" changed the wrong person — fixed 2026-09-21.** After "Update Ariz Khan name to Shubham Pandey", "add his
+  position as an AI engineeg" changed TEENA's role; the model had the earlier requests and still guessed. Now code
+  decides: an instruction with he/him/his/she/her/they/them/their that names nobody on the attendee list (a first
+  name or surname counts) means the person the LAST change to the attendee list added, renamed or gave a role
+  (`_last_person`: versions whose list did not change — a telephone, a deleted point — are stepped over; an undo of
+  a rename counts). Every attendee change (set_role, replace, delete) is moved to that line and a set_owner's owner
+  set to that name, logged when it differs from the model's choice; the model is also told who the pronoun means.
+  When no ONE person was changed last (first message, a delete, an undo of an add, a rewrite) the edit is refused:
+  "I could not tell who 'his' means. Please write the person's name." — asked, never guessed. The same rule for every
+  pronoun; nothing is inferred from a name. Changes not about a person ("their office number" → telephone) are left
+  alone. 21 tests; the 29 re-prompt and 24 question tests still pass.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

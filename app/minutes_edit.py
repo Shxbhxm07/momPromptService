@@ -194,6 +194,84 @@ def _earlier(state: Dict[str, Any], keep: int = 5) -> str:
     return "\n".join(lines[-keep:])
 
 
+# ── "his", "her", "their": the person changed last ───────────────────────────────────────────────
+# Seen on the cluster, 2026-09-21: "Update Ariz Khan name to Shubham Pandey", then "add his position as an AI
+# engineer" changed TEENA's role — the model was shown the earlier requests and still guessed. A pronoun with no
+# name means the person the last change was about; code decides that, the same for every pronoun (a name says
+# nothing about how a person is referred to).
+_PRONOUN = re.compile(r"\b(he|him|his|she|her|hers|they|them|their|theirs)\b", re.I)
+_TITLES = {"col", "colonel", "maj", "major", "capt", "captain", "lt", "lieutenant", "gen", "general", "brig",
+           "brigadier", "sub", "subedar", "hav", "havildar", "naik", "sep", "sepoy", "cdr", "cmde", "mr", "mrs",
+           "ms", "miss", "dr", "shri", "smt", "sri", "sir", "the", "and", "for"}
+
+
+def _name_words(name: str) -> set:
+    return {w for w in re.findall(r"[a-z]+", _flat(name).lower()) if len(w) >= 3 and w not in _TITLES}
+
+
+def _names_someone(instruction: str, attendees: List[Any]) -> bool:
+    """Does the instruction name anyone on the attendee list (a first name or a surname is enough)?"""
+    said = set(re.findall(r"[a-z]+", instruction.lower()))
+    return any(_name_words(a.get("name")) & said for a in attendees if isinstance(a, dict))
+
+
+def _last_person(state: Dict[str, Any], look_back: int = 5) -> int:
+    """The index, in the current attendee list, of the ONE attendee the last change to the list added, renamed
+    or gave a role — an undo of one of those included; -1 when it touched none or several (a delete, an undo of
+    an add, minutes written again).
+    Changes that left the list alone (a telephone number, a deleted point) are stepped over."""
+    versions = [state] + [h for h in reversed(state.get("history") or []) if isinstance(h, dict)]
+    for newer, older in list(zip(versions, versions[1:]))[:look_back]:
+        now = (newer.get("mom") or {}).get("attendees") or []
+        was = (older.get("mom") or {}).get("attendees") or []
+        if now == was:
+            continue
+        changed = [i for i, a in enumerate(now) if a not in was]
+        return changed[0] if len(changed) == 1 else -1
+    return -1
+
+
+def _about_person(ch: Any) -> bool:
+    return isinstance(ch, dict) and (
+        (ch.get("list") == "attendees" and ch.get("op") in ("set_role", "replace", "delete"))
+        or (ch.get("op") == "set_owner" and bool(_flat(ch.get("owner")))))
+
+
+def _pronoun_target(state: Dict[str, Any], instruction: str) -> Tuple[str, int]:
+    """(the pronoun, the index of the person it means) when the instruction says "his"/"her"/"their" and names
+    nobody on the attendee list; ("", -1) when there is nothing to resolve; (pronoun, -1) when it cannot be."""
+    m = _PRONOUN.search(instruction)
+    attendees = (state.get("mom") or {}).get("attendees") or []
+    if not m or _names_someone(instruction, attendees):
+        return "", -1
+    return m.group(0), _last_person(state)
+
+
+def _resolve_pronoun(changes: List[Any], mom: Dict[str, Any], pronoun: str, last: int, tag: str) -> List[Any]:
+    """Every change about a person made about the person changed last. Raises ValueError when the
+    instruction says "his" and there is no one person it can mean — asked, never guessed."""
+    if not pronoun or not any(_about_person(ch) for ch in changes):
+        return changes
+    attendees = mom.get("attendees") or []
+    if not 0 <= last < len(attendees) or not isinstance(attendees[last], dict):
+        raise ValueError(f"No change was made: I could not tell who {pronoun!r} means. Please write the "
+                         "person's name.")
+    person = attendees[last]
+    name = _flat(person.get("name"))
+    out = []
+    for ch in changes:
+        if _about_person(ch) and ch.get("list") == "attendees":
+            if ch.get("index") != last or not _quote_matches(_flat(ch.get("quote")), _line_of(person)):
+                logger.info(f"{tag} {pronoun!r} is {name} (changed last), not the line the model chose — "
+                            f"{ch.get('op')} goes to {name}")
+            ch = dict(ch, index=last, quote=_line_of(person))
+        elif _about_person(ch) and _flat(ch.get("owner")) != name:
+            logger.info(f"{tag} {pronoun!r} is {name} (changed last) — owner {_flat(ch.get('owner'))!r} → {name}")
+            ch = dict(ch, owner=name)
+        out.append(ch)
+    return out
+
+
 def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: str = "",
          refused: str = "") -> Dict[str, Any]:
     """The model's changes for `instruction`. `refused`: its previous answer and why the checks refused it,
@@ -675,6 +753,10 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         history = list(state.get("history") or [])
 
         earlier = _earlier(state)
+        pronoun, last = _pronoun_target(state, instruction)
+        if pronoun and last >= 0:
+            earlier += (f'\n- ("{pronoun}" in the INSTRUCTION means {_flat(mom["attendees"][last].get("name"))}, '
+                        f"the person changed last: ATTENDEES line {last})")
         data = _ask(mom, meta, instruction, earlier)
         changes = data.get("changes") if isinstance(data.get("changes"), list) else []
         logger.info(f"{tag} edit: {len(changes)} change(s) proposed for {instruction[:70]!r}")
@@ -703,6 +785,8 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             meta = copy.deepcopy(previous.get("meta") or {})
             before = copy.deepcopy(mom)
             changes = [ch for ch in changes if not (isinstance(ch, dict) and ch.get("op") == "undo")]
+        else:
+            changes = _resolve_pronoun(changes, mom, pronoun, last, tag)
         base_meta = copy.deepcopy(meta)
         done, refused, _ = apply(mom, meta, changes, instruction, earlier)
         if follow and not done and not undo and all(
@@ -722,6 +806,8 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             again = _ask(before, base_meta, instruction, earlier, refused=why)
             retry = [ch for ch in (again.get("changes") if isinstance(again.get("changes"), list) else [])
                      if isinstance(ch, dict) and ch.get("op") not in ("undo", "answer")]   # undo already applied
+            if not undo:
+                retry = _resolve_pronoun(retry, before, pronoun, last, tag)
             mom2, meta2 = copy.deepcopy(before), copy.deepcopy(base_meta)
             done2, refused2, _ = apply(mom2, meta2, retry, instruction, earlier)
             better = len(done2) > len(done)
