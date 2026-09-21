@@ -49,6 +49,7 @@ MAX_CHANGES = 40
 MAX_REPLY_TOKENS = 2000
 SNIPPET = 160                 # how much of each line the model is shown; enough to recognise it
 MIN_QUOTE = 8                 # a shorter quote proves nothing about which line was meant
+ANSWER_CHARS = 1500           # the longest answer to a question sent back in the ack's description
 
 # Every header detail the minutes print — each shows "xxx...xxx" until someone provides it, and the user may
 # provide any of them in a later prompt, in any wording (the user's rule, 2026-09-20). Classification only
@@ -84,7 +85,10 @@ Operations:
 - set_owner  : set who owns an action and when it is due. list = action_items, index + quote + owner + due
 - set_role   : set an attendee's role.       list = attendees, index + quote + role (e.g. Chairman, Secretary)
 - undo       : undo the LAST change to these minutes (may come with other changes: they apply after it)
-- cannot     : the instruction cannot be done as a change; say why in value
+- answer     : the INSTRUCTION is a question, or asks to explain the minutes ("explain the agenda", "what was
+               decided about the convoy?", "who attended?"). Nothing is changed. Put the answer in value: plain,
+               short sentences, using ONLY what the MINUTES above say. If they do not say, answer that they do not.
+- cannot     : the instruction asks for a change that cannot be made to these minutes; say why in value
 
 Rules:
 - Use ONLY words the user gave you or that are already in the minutes. Never invent a name, a date or a number.
@@ -96,6 +100,7 @@ Rules:
   CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED). A classification already set cannot be changed here;
   answer "cannot" if asked.
 - If the instruction asks for something that needs the original meeting document read again (for example "focus more on the budget"), answer "cannot".
+- A question is never "cannot": answer it with "answer".
 - EARLIER REQUESTS, when shown, are this user's previous messages and what each changed. Use them to understand
   "him", "that", "the change you made": the person or line they point to. To revert an earlier change that is not
   the last one, set the line back to the old value shown there.
@@ -108,7 +113,7 @@ _SCHEMA = {
         "required": ["op", "list", "index", "quote", "field", "value", "role", "owner", "due"],
         "properties": {
             "op": {"type": "string", "enum": ["set_meta", "set_title", "delete", "replace", "add",
-                                              "set_owner", "set_role", "undo", "cannot"]},
+                                              "set_owner", "set_role", "undo", "answer", "cannot"]},
             "list": {"type": "string", "enum": list(LISTS) + [""]},
             "index": {"type": "integer"},
             "quote": {"type": "string"},
@@ -327,6 +332,22 @@ def _said(value: str, *sources: str) -> bool:
     "Assistant Garrison Engineer" and "Station Commander" (caught by test, 2026-09-20)."""
     v = _plain(value)
     return v.strip() == "" or any(v in _plain(src) for src in sources)
+
+
+def _answer_checked(answers: List[str], mom: Dict[str, Any], meta: Dict[str, Any], instruction: str,
+                    tag: str) -> str:
+    """The model's answer to a question about the minutes, or a sentence saying it could not be given.
+
+    It goes to the chat, not into the document — still, a name or a number the minutes do not hold is not
+    passed on (the same test as guard 2): an answer with an invented figure is worse than none."""
+    text = " ".join(answers)
+    if not text:
+        return "I could not find an answer to that in these minutes."
+    bad = _unsupported(text, _allowed_text(mom, meta, instruction))
+    if bad:
+        logger.info(f"{tag} answer not given: it mentions {', '.join(bad[:5])}, which the minutes do not")
+        return "I could not answer that from these minutes."
+    return text
 
 
 _LABEL = re.compile(r"\s*\[(role|owner|due):\s*([^\]]*)\]", re.I)
@@ -584,15 +605,25 @@ def _same_minutes(job: KafkaJob, state: Optional[Dict[str, Any]]) -> bool:
     return not mine or (known is not None and mine <= set(known))
 
 
-def header_so_far(job: KafkaJob, c: Clients) -> Dict[str, Any]:
-    """The header details these minutes already have, when a follow-up has them written AGAIN from the same
-    document ("focus more on the budget"): the telephone or address a user gave in an earlier message must
-    not fall back to xxx...xxx. {} for a different document — a new meeting. Never raises."""
+def previous_state(job: KafkaJob, c: Clients) -> Optional[Dict[str, Any]]:
+    """The saved minutes a follow-up that is written AGAIN from the same document ("focus more on the budget")
+    replaces, or None for a new meeting (a different document). Never raises.
+
+    Two things carry over from it: the header details the user gave in earlier messages — the telephone or
+    address must not fall back to xxx...xxx — and the history, with the replaced version on top, so "undo"
+    brings back the minutes and every change the user made to them. Until 2026-09-21 the rewrite started a
+    fresh history, and a question answered "cannot" cost the user all their edits with no way back."""
     try:
         state = minutes_state.load(job, c.store) if job.conversation_id else None
-        return copy.deepcopy(state.get("meta") or {}) if _same_minutes(job, state) else {}
+        return state if _same_minutes(job, state) else None
     except Exception:
-        return {}
+        return None
+
+
+def header_so_far(job: KafkaJob, c: Clients) -> Dict[str, Any]:
+    """The header details of `previous_state`, or {}. Never raises."""
+    state = previous_state(job, c)
+    return copy.deepcopy(state.get("meta") or {}) if state else {}
 
 
 def follow_up(job: KafkaJob, c: Clients) -> Optional[dict]:
@@ -647,6 +678,19 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         data = _ask(mom, meta, instruction, earlier)
         changes = data.get("changes") if isinstance(data.get("changes"), list) else []
         logger.info(f"{tag} edit: {len(changes)} change(s) proposed for {instruction[:70]!r}")
+        # A QUESTION IS ANSWERED, NOTHING CHANGES. "can you explain me the agenda of this meeting" used to come
+        # back "cannot", and a follow-up that cannot be done is written again from the document: the user's
+        # added and renamed attendees were gone, and so was the history undo reads (cluster, 2026-09-21).
+        asked = any(isinstance(ch, dict) and ch.get("op") == "answer" for ch in changes)
+        answers = [_flat(ch.get("value")) for ch in changes
+                   if isinstance(ch, dict) and ch.get("op") == "answer" and _flat(ch.get("value"))]
+        changes = [ch for ch in changes if not (isinstance(ch, dict) and ch.get("op") == "answer")]
+        answer = _answer_checked(answers, mom, meta, instruction, tag) if asked else ""
+        if asked and all(isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
+            logger.info(f"{tag} answered a question in {time.time()-t0:.0f}s — the minutes are unchanged")
+            return build_ack(job, success=True, bucket=state.get("summary_bucket") or "",
+                             object_key=state.get("summary_object_key") or "", description=answer,
+                             limit=ANSWER_CHARS)
         # UNDO FIRST, THEN THE REST. "revert the change to Gupta and update Ariz Khan's position" used to do
         # only the undo — the rest was silently dropped. The other changes are now applied to the restored
         # version, each checked against it (a quote that no longer matches is refused and said so).
@@ -677,7 +721,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             why = f"{json.dumps(shown, ensure_ascii=False)}\nRefused:\n" + "\n".join(f"- {r}" for r in refused)
             again = _ask(before, base_meta, instruction, earlier, refused=why)
             retry = [ch for ch in (again.get("changes") if isinstance(again.get("changes"), list) else [])
-                     if isinstance(ch, dict) and ch.get("op") != "undo"]       # an undo is already applied
+                     if isinstance(ch, dict) and ch.get("op") not in ("undo", "answer")]   # undo already applied
             mom2, meta2 = copy.deepcopy(before), copy.deepcopy(base_meta)
             done2, refused2, _ = apply(mom2, meta2, retry, instruction, earlier)
             better = len(done2) > len(done)
@@ -727,7 +771,10 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         said = "; ".join(done)
         if refused:
             said += f". Not done: {refused[0]}"
-        return build_ack(job, success=True, bucket=bucket, object_key=key, description=said)
+        if answer:
+            said += f". {answer}"
+        return build_ack(job, success=True, bucket=bucket, object_key=key, description=said,
+                         limit=ANSWER_CHARS if answer else None)
     except Exception as e:
         logger.error(f"{tag} edit failed after {time.time()-t0:.0f}s: {e}")
         # ValueError is only ever raised here with a sentence meant for the user, so it is passed on

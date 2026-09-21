@@ -13,7 +13,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _get(msg: Dict[str, Any], *names, default=None):
@@ -179,7 +179,8 @@ _MAX_DESCRIPTION = 400
 
 
 def build_ack(job: KafkaJob, *, success: bool, description: str,
-              bucket: str = "", object_key: str = "", action: str = "save") -> Dict[str, Any]:
+              bucket: str = "", object_key: str = "", action: str = "save",
+              limit: Optional[int] = None) -> Dict[str, Any]:
     """The acknowledgement: the backend's own message back, plus the result.
 
     The IMIR backend's reference ack (2026-09-16) fixes the rule — the service writes ONLY `action`,
@@ -189,12 +190,16 @@ def build_ack(job: KafkaJob, *, success: bool, description: str,
 
     On failure the bucket/key are omitted rather than sent empty: an empty objectKey reads as
     "there is a file at ''" to anything that tries to fetch it.
+
+    `limit`: the longest description, `_MAX_DESCRIPTION` unless given — an answer to a user's question
+    about the minutes (minutes_edit) is allowed more than one sentence.
     """
     from config import ACK_FAILURE_MESSAGE
 
     desc = " ".join((description or "").split())
-    if len(desc) > _MAX_DESCRIPTION:
-        desc = desc[:_MAX_DESCRIPTION - 1].rsplit(" ", 1)[0] + "…"
+    most = limit or _MAX_DESCRIPTION
+    if len(desc) > most:
+        desc = desc[:most - 1].rsplit(" ", 1)[0] + "…"
 
     ack: Dict[str, Any] = dict(job.echo)
     # Three the backend matches on. Returned as sent when it sent them in this spelling; filled from

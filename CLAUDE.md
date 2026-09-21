@@ -622,6 +622,18 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   "reask" pattern), the new answer passes the same guards, and the one that does more is kept. 29 tests: both
   real answers now apply, invented surnames/roles/dates are still refused, one call when right first time, never a
   retry after "cannot".
+- **A question wiped the user's edits — fixed 2026-09-21.** On the cluster, after "add Teena…" and a rename, "can you
+  explain me the agenda of this meetig" came back `cannot`, so the follow-up rule wrote the minutes AGAIN from the PDF
+  (2 min): Teena and the rename were gone, the reply was the new summary's first sentence, and the new state started
+  an empty history, so undo could not help. Now: (1) a new op `answer` — a question is answered from the saved minutes
+  only; the ack is SUCCESS with the answer as `description` (up to `ANSWER_CHARS` 1500, `build_ack(limit=…)`) and the
+  CURRENT file's bucket/key; no new file, no state change, no rewrite (also when the model adds a `cannot` beside it).
+  An answer naming a number or name the minutes do not hold is replaced by "I could not answer that from these
+  minutes." (guard 2's test). A change + a question in one message: the change is made and the answer added.
+  (2) A real rewrite ("focus more on the budget") keeps the history with the replaced version on top
+  (`minutes_edit.previous_state`), records itself as an earlier request, and — when the replaced minutes had edits —
+  the reply starts "Written again from the document; your earlier changes are not in it. Send "undo" to get them
+  back." 24 tests replaying the session; the 29 re-prompt tests and the 38 layout rules pass.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

@@ -59,6 +59,10 @@ _ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "lt", "col", "gen", "maj", "capt", "b
                   "no", "st", "sr", "jr", "vs", "etc", "e.g", "i.e", "hq", "rs", "approx", "dept", "govt"}
 _SENTENCE_END = re.compile(r"[.!?](?=\s+[A-Z(\"'])")
 DESCRIPTION_CHARS = 300
+# A follow-up the saved minutes cannot answer by a change ("focus more on the budget") writes them again from
+# the document. What the history records for it, and what the user is told when their changes are left behind.
+REWRITTEN = "the minutes were written again from the document"
+REWRITTEN_NOTE = 'Written again from the document; your earlier changes are not in it. Send "undo" to get them back.'
 
 
 def one_sentence(text: str, limit: int = DESCRIPTION_CHARS) -> str:
@@ -156,8 +160,10 @@ def process(job: KafkaJob, c: Clients) -> dict:
         ack = minutes_edit.follow_up(job, c)
         if ack is not None:
             return ack
-        # Written again from the same document: keep the header details the user already gave.
-        so_far = minutes_edit.header_so_far(job, c)
+        # Written again from the same document: keep the header details the user already gave, and the
+        # minutes being replaced, so "undo" brings them back with every change the user made.
+        previous = minutes_edit.previous_state(job, c)
+        so_far = dict((previous or {}).get("meta") or {})
         if not job.prompt and not job.file_urls and not job.file_fids:
             raise ValueError("Nothing to write minutes from: the job has no prompt and no file_urls.")
         documents = _read_documents(job, c)
@@ -263,14 +269,20 @@ def process(job: KafkaJob, c: Clients) -> dict:
                            template={"name": template.name, "status": template.status,
                                      "fields": from_template,
                                      "url": job.template_url if template.fillable else ""},
-                           sources=minutes_state.sources_of(job))
+                           sources=minutes_state.sources_of(job),
+                           instruction=job.prompt if previous else "",
+                           changes=[REWRITTEN] if previous else None,
+                           history=((previous.get("history") or []) + [minutes_state.snapshot(previous)]
+                                    if previous else None))
         if job.template_url:
             logger.info(f"[JOB {job.conversation_id}] template {template.name!r}: {template.status}"
                         + (f", used {from_template}" if from_template else "")
                         + (f" — {template.reason}" if template.reason else ""))
         logger.info(f"[JOB {job.conversation_id}] done in {time.time()-t0:.0f}s — {bucket}/{key}")
-        return build_ack(job, success=True, bucket=bucket, object_key=key,
-                         description=one_sentence(mom.get("summary") or ""))
+        said = one_sentence(mom.get("summary") or "")
+        if previous and (previous.get("history") or previous.get("changes")):
+            said = f"{REWRITTEN_NOTE} {said}"
+        return build_ack(job, success=True, bucket=bucket, object_key=key, description=said)
     except Exception as e:
         logger.error(f"[JOB {job.conversation_id}] failed after {time.time()-t0:.0f}s: {e}")
         # ValueError is only ever raised here with a sentence meant for the user, so it is passed on
