@@ -23,7 +23,7 @@ class UnreadableDocument(ValueError):
 def check(raw: bytes, name: str) -> None:
     """Raise UnreadableDocument if this file is too big or is not a document. Otherwise return."""
     size_mb = len(raw) / 1048576
-    if size_mb > MAX_DOC_MB:
+    if MAX_DOC_MB and size_mb > MAX_DOC_MB:
         raise UnreadableDocument(f"{name} is {size_mb:.0f} MB; the limit is {MAX_DOC_MB} MB.")
     if os.path.splitext(name)[1].lower() not in SUPPORTED_EXTENSIONS and not _sniff(raw):
         raise UnreadableDocument(f"{name}: unsupported file type. Send PDF, DOCX, DOC or TXT.")

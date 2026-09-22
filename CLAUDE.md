@@ -59,7 +59,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/tidy_minutes.py` | code only, no model call, **never removes a fact**: a decision an action item already records is merged into it only when the kept line holds every number, name and all but one word of the other; owners written as the attendee list has them ("Rohit" → "Maj Rohit Negi", unique match only); after essence, a figure is dropped only when ONE printed point or decision holds all its numbers and every specific word of its label. No cap |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text. Plain-line replies ("0: 3, 7"), points first, then decisions and figures shown each item's points; what the model leaves out is placed by shared numbers/words |
-| `tests/` | **offline tests** — `sh tests/run.sh` (127 checks: re-prompting, questions, "his/her", spelling, replies, ITEM grouping). No model, no network; not in the image |
+| `tests/` | **offline tests** — `sh tests/run.sh` (163 checks: re-prompting, questions, "his/her", spelling, replies, ITEM grouping, no limits, speed). No model, no network; not in the image. `fake_model.py` is a stand-in model with realistic delays |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
@@ -674,6 +674,45 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   exactly once. The OpenRouter credit ran out (402) during the next job, so the 15/30-minute scans, t1, meeting.pdf
   and the re-prompt session were NOT run with the model — that is for the cluster. The offline tests now live in
   `tests/` (they were lost with a session's scratch folder); 127 pass.
+- **No size limits — 2026-09-22, the user's rule: "I do not want any limit".** A client's 290-page document was
+  refused. What was removed or reworked: `MAX_SOURCE_CHARS` (was 300,000) and `MAX_DOC_MB` (was 50) default to 0 =
+  none; `OCR_MAX_PAGES` (was 200) defaults to 0 = every page — a number there SKIPPED the later scanned pages,
+  silently losing their content (YAML, compose, .env.example and the onboarding form now say 0; **the live
+  Deployment must be changed in the console**). The decisions, actions, figures (and, with windows off, points)
+  passes sent the whole transcript in ONE call — a document longer than the model reads failed the job; now
+  `LLMManager._read_whole` makes one call when it fits the context and otherwise one per part (`_fit_parts`: cut at a
+  line or sentence end, each part opening with the last 1,500 characters of the one before; 3 chars/token, 1.5 for
+  Devanagari), replies joined and de-duplicated by the existing bullet merge; a part answering "None explicitly
+  stated" is left out. The merge of a long meeting's partial MoMs read at most 16,000 characters (12 partials cut to
+  1,311 each on the cluster's 220k-char t5.docx); `_SYNTHESIS_INPUT_CHARS` is now sized from MODEL_CONTEXT_LIMIT
+  (~170k at 65,536). `agenda_items.MAX_ITEMS` 12 → 50. Re-prompting a MoM too large for one call (1,500+ points)
+  shows the header, attendees and agenda whole and, of the long lists, the lines sharing the instruction's RARER
+  words first, each under its real number (`minutes_edit._fitted`); a normal MoM is shown exactly as before.
+  `tests/t_limits.py`, 24 checks (a 780k-char transcript split with nothing lost, every scanned page read, a
+  60 MB file accepted, a 2,500-point MoM re-prompted in one call); 151 offline checks and the 38 layout rules pass.
+  NOT tested with the model (no OpenRouter credit). Limits that remain are not ours: the IMIR screen waits ~5
+  minutes (a 220k-char job takes ~20); the Route's 3600 s and `terminationGracePeriodSeconds: 3600` bound an HTTP
+  reply and a redeploy, while the Kafka ack is sent whatever the HTTP caller does.
+- **Faster, same minutes — 2026-09-22** ("make it fast on any document"). t5.docx took ~20 min on the cluster: its 12
+  main-read chunks ran one after another (4 min), its 157 windows two at a time (~13 min), then three whole-file reads
+  one after another. IBM allows 8 requests A SECOND on Essentials/Standard (Lite 2); each of our calls takes seconds.
+  Now: (1) `LLM_CONCURRENCY` 2 → **8** (YAML, compose, form); (2) the main read's chunks run side by side
+  (`one_chunk`, order kept for the merge); (3) the windows and the decisions / actions / figures reads are asked at
+  the START, beside the main read (`_generate_mom_json` → `ahead`; the steps in `_mom_json_steps` take those answers
+  instead of asking, merging in the same order); (4) one process-wide gate, `_INFLIGHT` (a semaphore of
+  LLM_CONCURRENCY around the HTTP post only, so a 429 wait holds no lane), keeps every step together at the setting;
+  (5) scanned pages: rendered one at a time (pdfium is not thread-safe), read by `OCR_WORKERS` (4) Tesseract
+  processes at once, text put back in page order, at most 2×workers images in memory, `OMP_THREAD_LIMIT=1`; the pod
+  asks for 2 CPUs (was 500m); (6) `minutes.process`: a request identical to one RUNNING (same conversation,
+  prompt, files, template, mom_meta, kind) waits for it and is answered with its result under its own fields —
+  "Try again" doubled the t5 work; nothing is cached once a run ends. PROOF OF SAME MINUTES: the old pipeline
+  (GitHub HEAD) and the new one, same stand-in model (`tests/fake_model.py`: same question → same answer, delay by
+  size + jitter so calls finish out of order), on 5 documents (5-min, t1, 45-min, t4, t5): minutes identical, same
+  number of calls; old at 2 calls vs new at 8: t5 8.5 → 2.0 stand-in seconds (4.3×), t4 4.7×, 45-min 3×, 5-min 2×
+  — on the cluster that suggests t5 ~20 → ~5 min, unmeasured (no credit). 4 scanned pages: identical text, 9 s → 2 s.
+  End to end on the local stack with the stand-in model: scanned 15-min PDF and t5, each with a "Try again" sent
+  while running — one run each, both requests got the same file. `tests/t_speed.py` 12 checks; 163 in all; 38 layout
+  rules pass. NOT done: bigger windows (MOM_WINDOW_CHARS) — faster but could miss small points (accuracy rule).
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

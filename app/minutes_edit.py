@@ -32,6 +32,7 @@ import difflib
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -153,8 +154,13 @@ def _line_of(item: Any) -> str:
     return _flat(item)
 
 
-def _numbered(items: List[Any]) -> str:
-    return "\n".join(f"{i}. {_line_of(v)[:SNIPPET]}" for i, v in enumerate(items)) or "(none)"
+def _numbered(items: List[Any], keep: Optional[set] = None) -> str:
+    """The list as numbered lines — only the indices in `keep` when given, each still under its own number."""
+    lines = [f"{i}. {_line_of(v)[:SNIPPET]}" for i, v in enumerate(items) if keep is None or i in keep]
+    if keep is not None and len(keep) < len(items):
+        lines.append(f"(… {len(items) - len(keep)} more lines not shown — only lines sharing a word with the "
+                     "INSTRUCTION are listed)")
+    return "\n".join(lines) or "(none)"
 
 
 def _rows(meta: Dict[str, Any]) -> str:
@@ -167,8 +173,56 @@ def _rows(meta: Dict[str, Any]) -> str:
     return " ; ".join(rows)
 
 
-def _shown(mom: Dict[str, Any], meta: Dict[str, Any]) -> str:
-    """The minutes as the model sees them: every header field, xxx...xxx where it was never provided."""
+# A very large MoM does not fit one read: a 220,000-character document gave 1,500+ points (2026-09-22), and every
+# line shown to the model is ~40 tokens. Then the long lists show only the lines that share a word or a number
+# with the instruction, each under its real number; the header, attendees and agenda are always whole.
+_REDUCE_FIRST = ("key_points", "key_figures", "action_items", "decisions")
+
+
+def _room() -> int:
+    """How many characters of minutes one edit call can show, at a cautious 3 characters a token."""
+    from llama.config import MODEL_CONTEXT_LIMIT
+    return max(20000, (MODEL_CONTEXT_LIMIT - MAX_REPLY_TOKENS - len(_SYSTEM) // 3 - 3000) * 3)
+
+
+def _words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9]+", _normalise(text)) if len(w) >= 4 or w.isdigit()}
+
+
+def _fitted(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, most: int) -> str:
+    """`_shown`, cut down to `most` characters by showing only the lines of the long lists that the instruction
+    mentions — those sharing its RARER words first ("website" on one line counts far more than "point" on every
+    line). Nothing is changed by showing less: a change can only name a line it was shown."""
+    text = _shown(mom, meta)
+    if len(text) <= most:
+        return text
+    said = _words(instruction)
+    keep: Dict[str, set] = {}
+    ranked: Dict[str, List[int]] = {}
+    for name in _REDUCE_FIRST:
+        items = mom.get(name) or []
+        shared = [_words(_line_of(v)) & said for v in items]
+        seen_on = {w: sum(1 for t in shared if w in t) for w in said}
+        score = {i: sum(math.log((len(items) + 1) / seen_on[w]) for w in t) for i, t in enumerate(shared) if t}
+        ranked[name] = sorted(score, key=lambda i: (-score[i], i))
+        keep[name] = set(ranked[name])
+        text = _shown(mom, meta, keep)
+        if len(text) <= most:
+            break
+    # Still too long (a common word matches hundreds of lines): the best-matching lines of each list, fewer each time.
+    cap = max((len(r) for r in ranked.values()), default=0)
+    while len(text) > most and cap > 1:
+        cap //= 2
+        keep = {n: set(r[:cap]) for n, r in ranked.items()}
+        text = _shown(mom, meta, keep)
+    logger.info(f"minutes too large for one edit call ({len(_shown(mom, meta))} chars) — showing the lines the "
+                f"instruction mentions: " + ", ".join(f"{n} {len(k)}/{len(mom.get(n) or [])}" for n, k in keep.items()))
+    return text
+
+
+def _shown(mom: Dict[str, Any], meta: Dict[str, Any], keep: Optional[Dict[str, set]] = None) -> str:
+    """The minutes as the model sees them: every header field, xxx...xxx where it was never provided. `keep`:
+    for a list named in it, only those line numbers (see _fitted)."""
     sec = meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {}
     address = meta.get("address")
     values = {
@@ -183,7 +237,7 @@ def _shown(mom: Dict[str, Any], meta: Dict[str, Any]) -> str:
     header += [f"{f}: {_flat(v) or MISSING}" for f, v in values.items()]
     parts = ["HEADER:\n" + "\n".join(header)]
     for name in LISTS:
-        parts.append(f"{name.upper()}:\n{_numbered(mom.get(name) or [])}")
+        parts.append(f"{name.upper()}:\n{_numbered(mom.get(name) or [], (keep or {}).get(name))}")
     return "\n\n".join(parts)
 
 
@@ -294,7 +348,8 @@ def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: s
              "corrected list of changes for the INSTRUCTION, following every rule. If it cannot be done within "
              "the rules, answer cannot.") if refused else ""
     reply = _get_writer().generate(
-        _SYSTEM, f"MINUTES:\n{_shown(mom, meta)}\n\n{before}INSTRUCTION:\n{instruction}{after}",
+        _SYSTEM, f"MINUTES:\n{_fitted(mom, meta, instruction + ' ' + earlier, _room() - len(earlier) - len(after))}"
+                 f"\n\n{before}INSTRUCTION:\n{instruction}{after}",
         max_new_tokens=MAX_REPLY_TOKENS, temperature=0.0,
         extra={"response_format": {"type": "json_schema",
                                    "json_schema": {"name": "minute_changes", "schema": _SCHEMA,

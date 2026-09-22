@@ -99,9 +99,12 @@ spec:
             # Resolution a scanned page is read at. Below 300, Hindi vowel signs drop out.
             - name: OCR_DPI
               value: "300"
-            # Most scanned pages read per document (about 1 s each); later scanned pages are skipped.
+            # Most scanned pages read per document; 0 = every page (a number skips the pages after it).
             - name: OCR_MAX_PAGES
-              value: "200"
+              value: "0"
+            # Scanned pages read at the same time (one CPU core each; see requests.cpu). Same text, faster.
+            - name: OCR_WORKERS
+              value: "4"
             # A page with fewer characters of its own text than this is treated as a scan.
             - name: MIN_PAGE_TEXT_CHARS
               value: "40"
@@ -131,8 +134,10 @@ spec:
             # this cluster has already made 48k-token calls. On CP4D, confirm its model's limit first.
             - name: MODEL_CONTEXT_LIMIT
               value: "65536"
+            # Model calls in flight at once, for the whole pod. IBM allows 8 requests a SECOND (Essentials/Standard)
+            # and each call takes seconds, so 8 in flight is well inside it. Same questions, same answers — faster.
             - name: LLM_CONCURRENCY
-              value: "2"
+              value: "8"
             - name: MOM_WINDOW_KEY_POINTS
               value: "true"
             # CHUNK SIZE: characters of transcript per window call. Decides most of a job's model calls:
@@ -148,7 +153,7 @@ spec:
               value: "CHANGE_ME"
           resources:
             requests:
-              cpu: 500m
+              cpu: "2"              # OCR_WORKERS scanned pages at once need their cores; was 500m
               memory: 512Mi
             limits:
               memory: 2Gi

@@ -58,7 +58,9 @@ services:
       ENABLE_OCR: ${ENABLE_OCR:-true}
       OCR_LANGS: ${OCR_LANGS:-eng+hin}
       OCR_DPI: ${OCR_DPI:-300}
-      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-200}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-0}
+      OCR_WORKERS: ${OCR_WORKERS:-4}
+      LLM_CONCURRENCY: ${LLM_CONCURRENCY:-8}
       MIN_PAGE_TEXT_CHARS: ${MIN_PAGE_TEXT_CHARS:-40}
     ports:
       - "${SERVICE_PORT:-8010}:8000"

@@ -4,6 +4,7 @@ import json
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 
 from llama.config import (APP_MODE, LLM_MODEL_PATH, VLLM_API_BASE, MAX_INPUT_TOKENS,
@@ -71,6 +72,37 @@ def _pool_status() -> dict:
 # Estimate system prompt sizes in tokens (chars // 4) for context budget calculation
 _ANALYSIS_PROMPT_TOKENS = len(MEETING_ANALYSIS_PROMPT) // 4
 _SYNTHESIS_PROMPT_TOKENS = len(SYNTHESIS_PROMPT) // 4
+# AT MOST LLM_CONCURRENCY MODEL CALLS IN FLIGHT, for the whole process. Since 2026-09-22 the steps of a job run side by
+# side (main read, windows, decisions, actions, figures) and each has its own threads; this one gate is what keeps the
+# total at the setting — IBM allows 8 requests a second on Essentials/Standard, each of our calls takes seconds. A
+# 429 wait happens outside the gate, so a rate-limited call does not hold a lane.
+_INFLIGHT = threading.BoundedSemaphore(max(1, LLM_CONCURRENCY))
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+
+
+def _chars_per_token(text: str) -> float:
+    """A cautious characters-per-token figure for sizing a request: 3 for English (it is nearer 4), 1.5 where
+    much of the text is Devanagari, which the tokenizer splits far finer."""
+    sample = text[:20000]
+    hindi = len(_DEVANAGARI.findall(sample)) / max(1, len(sample))
+    return 1.5 if hindi > 0.2 else 3.0
+
+
+def _fit_parts(text: str, most: int, overlap: int = 1500) -> list:
+    """`text` in parts of at most `most` characters, cut at a line break or a sentence end, each part after the
+    first opening with the last `overlap` characters of the one before."""
+    step = max(1000, most - overlap)
+    parts, start = [], 0
+    while start < len(text):
+        end = min(len(text), start + step)
+        if end < len(text):
+            cut = max(text.rfind("\n", start + step // 2, end), text.rfind(". ", start + step // 2, end))
+            if cut > start:
+                end = cut + 1
+        head = text[max(0, start - overlap):start] if start else ""
+        parts.append(head + text[start:end])
+        start = end
+    return parts
 
 # --- LIVE-1 R4: translation output hardening --------------------------------
 # The model sometimes prepends a preamble ("Sure, here's the translation: ...")
@@ -412,8 +444,9 @@ class LLMManager:
         for attempt in range(4):
             try:
                 logger.debug(f"[KeyPool] Using key #{key_idx} (...{key[-4:]})")
-                response = self.client.post(url, json=payload,
-                                            headers={"Authorization": f"Bearer {self._bearer(key)}"})
+                with _INFLIGHT:
+                    response = self.client.post(url, json=payload,
+                                                headers={"Authorization": f"Bearer {self._bearer(key)}"})
                 response.raise_for_status()
                 content, finish_reason = self._parse_reply(response.json(), url)
                 if finish_reason == "length":
@@ -872,6 +905,31 @@ class LLMManager:
 
         _mtype, _focus = self._focus_for(text)   # auto-detected meeting type → template focus (no UI)
         route = self._route(estimated_tokens)    # one model for the whole request — never switch mid-way
+
+        # SIDE BY SIDE (2026-09-22). The windows and the decisions / actions / figures reads depend only on the text,
+        # not on the main read, so they are asked NOW and read in parallel with it; each step below then takes its
+        # answer instead of asking — the same questions, merged in the same order, so the minutes are the same.
+        # One after another they made most of the 20 minutes on the cluster's t5.docx. _INFLIGHT keeps the calls
+        # in flight at LLM_CONCURRENCY for the whole job.
+        ahead_pool = ThreadPoolExecutor(max_workers=5)
+        whole = lambda prompt, ask, label: ahead_pool.submit(
+            self._read_whole, prompt, text, ask, MAX_NEW_TOKENS_EXTRACTION, temperature, route, label)
+        ahead = {"decisions": whole(DECISIONS_EXTRACTION_PROMPT, "List all decisions:", "DECISIONS"),
+                 "action_items": whole(ACTION_ITEMS_EXTRACTION_PROMPT, "List all action items:", "ACTION ITEMS"),
+                 "figures": whole(FIGURES_EXTRACTION_PROMPT, "List every figure stated:", "KEY FIGURES")}
+        if MOM_WINDOW_KEY_POINTS:
+            ahead["windows"] = ahead_pool.submit(self._extract_windows, text, temperature, route)
+        else:
+            ahead["key_points"] = whole(KEY_POINTS_EXTRACTION_PROMPT, "List every point discussed:", "KEY POINTS")
+        try:
+            return self._mom_json_steps(text, temperature, output_lang, metadata, text_len, estimated_tokens,
+                                        _mtype, _focus, route, ahead)
+        finally:
+            ahead_pool.shutdown(wait=False, cancel_futures=True)
+
+    def _mom_json_steps(self, text, temperature, output_lang, metadata, text_len, estimated_tokens,
+                        _mtype, _focus, route, ahead):
+        """The JSON pipeline's steps, in order; `ahead` holds the reads already asked for (see above)."""
         raw, chunks_used = self._generate_json_raw(text, temperature, estimated_tokens, focus=_focus, route=route)
         logger.info(f"[MOM] JSON generated ({len(raw)} chars, chunks={chunks_used}, type={_mtype})")
 
@@ -896,7 +954,7 @@ class LLMManager:
         #   action_items   three windows; no single window contains one. Grounded-only mode
         #                  returned ONE decision and ZERO action items on a meeting that had both.
         if MOM_WINDOW_KEY_POINTS:
-            by_type = self._extract_windows(text, temperature, route)
+            by_type = ahead["windows"].result()
             window_points = [p["text"] for p in by_type.get("key_point", [])]
             # The windows also spot decisions/actions; keep them as extra candidates for the
             # whole-transcript passes to merge with, never as the only source.
@@ -912,10 +970,10 @@ class LLMManager:
         # the job the windows just did — so it runs only when the windows are off (since 2026-09-19:
         # one call and one whole-transcript read fewer per job; essence.py keeps a few points per ITEM).
         if not MOM_WINDOW_KEY_POINTS:
-            content = self._fill_key_points_json(content, text, temperature, route)
-        content = self._fill_decisions_json(content, text, temperature, route)
-        content = self._fill_action_items_json(content, text, temperature, route)
-        content = self._fill_figures_json(content, text, temperature, route)
+            content = self._fill_key_points_json(content, text, temperature, route, ahead.get("key_points"))
+        content = self._fill_decisions_json(content, text, temperature, route, ahead.get("decisions"))
+        content = self._fill_action_items_json(content, text, temperature, route, ahead.get("action_items"))
+        content = self._fill_figures_json(content, text, temperature, route, ahead.get("figures"))
 
         # Final grounding sweep: a point may quote a real span and still name someone who was
         # never mentioned. See _proper_nouns_supported.
@@ -1032,8 +1090,12 @@ class LLMManager:
 
         logger.info("[MOM] Mode: chunk + synthesise [JSON]")
         chunks = chunk_transcript(text)
-        partials = []
-        for i, chunk in enumerate(chunks):
+
+        # THE CHUNKS ARE READ SIDE BY SIDE (2026-09-22): each is its own question, so reading them together gives
+        # exactly the answers reading them one by one did — in the same order for the merge — in a fraction of
+        # the time (12 chunks of the cluster's t5.docx took 4 minutes one after another).
+        def one_chunk(numbered):
+            i, chunk = numbered
             logger.info(f"[MOM] Analysing chunk {i+1}/{len(chunks)} [JSON]")
             chunk_prompt = (
                 f"This is section {i+1} of {len(chunks)} of a longer meeting transcript.\n"
@@ -1044,8 +1106,11 @@ class LLMManager:
                 f"─────────────────────────────────────────────────\n\n"
                 f"Now output the JSON object." + strict_note
             )
-            partials.append(self.generate(analysis_sys, chunk_prompt, MAX_NEW_TOKENS_PER_CHUNK, temperature,
-                                          model=m, api_base=ab))
+            return self.generate(analysis_sys, chunk_prompt, MAX_NEW_TOKENS_PER_CHUNK, temperature,
+                                 model=m, api_base=ab)
+
+        with ThreadPoolExecutor(max_workers=max(1, LLM_CONCURRENCY)) as pool:
+            partials = list(pool.map(one_chunk, enumerate(chunks)))
 
         combined = self._join_partials(partials, "\n\n=== PARTIAL JSON ===\n\n")
         synthesis_prompt = (
@@ -1059,7 +1124,43 @@ class LLMManager:
         return self.generate(synthesis_sys, synthesis_prompt, MAX_NEW_TOKENS_SYNTHESIS, temperature,
                              model=m, api_base=ab), len(chunks)
 
-    _SYNTHESIS_INPUT_CHARS = 16000
+    # What the merge of a long meeting's partial MoMs may read: the model's context less the reply and the prompt,
+    # at a cautious 3 characters a token. It was a fixed 16,000 — on a 220,000-character document (cluster,
+    # 2026-09-22) every one of 12 partials was cut to 1,311 characters, on a model that can read ten times that.
+    # Never below the old 16,000.
+    _SYNTHESIS_INPUT_CHARS = max(16000, (MODEL_CONTEXT_LIMIT - MAX_NEW_TOKENS_SYNTHESIS
+                                         - max(len(SYNTHESIS_PROMPT), len(SYNTHESIS_PROMPT_JSON)) // 3 - 2000) * 3)
+
+    def _read_whole(self, system: str, transcript: str, ask: str, max_tokens: int, temperature: float,
+                    route=None, label: str = "") -> str:
+        """A whole-transcript pass (decisions, actions, figures): ONE call when the transcript fits the model's
+        context, otherwise one call per part — each part opening with the end of the one before, so a decision
+        spoken across the cut is whole in one of them — and the replies joined. Every caller reads the reply as
+        one bullet list and drops repeats, so two parts finding the same decision leave it once.
+
+        NO LENGTH LIMIT (2026-09-22): the whole transcript used to go in one call, and a document longer than the
+        model can read failed the job. Now length costs calls, never content."""
+        limit = (route or {}).get("context_limit") or MODEL_CONTEXT_LIMIT
+        per_token = _chars_per_token(transcript)
+        room = limit - max_tokens - len(system) // 3 - 1000          # tokens left for the transcript
+        most = max(8000, int(room * per_token))
+        kw = dict(model=(route or {}).get("model"), api_base=(route or {}).get("api_base"))
+        if len(transcript) <= most:
+            return self.generate(system, f"TRANSCRIPT:\n{transcript}\n\n{ask}", max_tokens, temperature, **kw)
+        parts = _fit_parts(transcript, most)
+        logger.info(f"[MOM] {label}: {len(transcript)} chars is more than one read ({most}) — {len(parts)} parts")
+
+        def one(numbered):
+            i, part = numbered
+            return self.generate(system, f"TRANSCRIPT (part {i} of {len(parts)}):\n{part}\n\n{ask}",
+                                 max_tokens, temperature, **kw).strip()
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, LLM_CONCURRENCY)) as pool:
+            replies = list(pool.map(one, enumerate(parts, 1)))
+        # A part with nothing to report says so ("None explicitly stated"); only the parts that found something
+        # are passed on, so one empty part cannot read as "nothing in the whole meeting".
+        return "\n".join(r for r in replies if r and "none explicitly stated" not in r.lower())
 
     @classmethod
     def _join_partials(cls, partials, separator):
@@ -1615,7 +1716,7 @@ class LLMManager:
         )
         return by_type
 
-    def _fill_key_points_json(self, content, transcript, temperature, route=None):
+    def _fill_key_points_json(self, content, transcript, temperature, route=None, ahead=None):
         """Run a focused key-points extraction and MERGE it with the main pass's list.
 
         WHY THIS EXISTS — the same reason _fill_figures_json does, applied to the field the API
@@ -1641,11 +1742,9 @@ class LLMManager:
             f"[MOM] KEY POINTS — focused extraction pass [JSON] "
             f"(main pass gave {len(existing)}, {thin} without a specific detail)"
         )
-        focused = self.generate(
-            KEY_POINTS_EXTRACTION_PROMPT,
-            f"TRANSCRIPT:\n{transcript}\n\nList every point discussed:", MAX_NEW_TOKENS_EXTRACTION, temperature,
-            model=(route or {}).get("model"), api_base=(route or {}).get("api_base"),
-        ).strip()
+        focused = (ahead.result() if ahead is not None else  # asked already, beside the main read
+                   self._read_whole(KEY_POINTS_EXTRACTION_PROMPT, transcript, "List every point discussed:",
+                                    MAX_NEW_TOKENS_EXTRACTION, temperature, route, "KEY POINTS")).strip()
 
         merged = list(existing)
         seen = {self._task_key(k) for k in existing}
@@ -1666,7 +1765,7 @@ class LLMManager:
         logger.info(f"[MOM] KEY POINTS: {len(existing)} main + {added} recovered = {len(merged)}")
         return content
 
-    def _fill_decisions_json(self, content, transcript, temperature, route=None):
+    def _fill_decisions_json(self, content, transcript, temperature, route=None, ahead=None):
         """Run the focused decisions extraction and MERGE it with the main pass's decisions.
 
         Was gated on `if not weak: return` — i.e. the fill ran only when the main pass produced
@@ -1680,11 +1779,9 @@ class LLMManager:
         """
         existing = [d for d in (content.get("decisions") or []) if isinstance(d, str) and d.strip()]
         logger.info(f"[MOM] DECISIONS — focused extraction pass [JSON] (main pass gave {len(existing)})")
-        focused = self.generate(
-            DECISIONS_EXTRACTION_PROMPT,
-            f"TRANSCRIPT:\n{transcript}\n\nList all decisions:", MAX_NEW_TOKENS_EXTRACTION, temperature,
-            model=(route or {}).get("model"), api_base=(route or {}).get("api_base"),
-        ).strip()
+        focused = (ahead.result() if ahead is not None else  # asked already, beside the main read
+                   self._read_whole(DECISIONS_EXTRACTION_PROMPT, transcript, "List all decisions:",
+                                    MAX_NEW_TOKENS_EXTRACTION, temperature, route, "DECISIONS")).strip()
 
         merged = list(existing)
         seen = {self._task_key(d) for d in existing}
@@ -1707,7 +1804,7 @@ class LLMManager:
         logger.info(f"[MOM] DECISIONS: {len(existing)} main + {added} recovered = {len(merged)}")
         return content
 
-    def _fill_figures_json(self, content, transcript, temperature, route=None):
+    def _fill_figures_json(self, content, transcript, temperature, route=None, ahead=None):
         """Populate KEY FIGURES from a focused extraction pass.
 
         Unlike the decisions/action-item fills, this ALWAYS runs rather than only on an empty
@@ -1730,11 +1827,9 @@ class LLMManager:
         if content.get("key_figures"):
             return content
         logger.info("[MOM] KEY FIGURES — running focused extraction pass [JSON]")
-        focused = self.generate(
-            FIGURES_EXTRACTION_PROMPT,
-            f"TRANSCRIPT:\n{transcript}\n\nList every figure stated:", MAX_NEW_TOKENS_EXTRACTION, temperature,
-            model=(route or {}).get("model"), api_base=(route or {}).get("api_base"),
-        ).strip()
+        focused = (ahead.result() if ahead is not None else  # asked already, beside the main read
+                   self._read_whole(FIGURES_EXTRACTION_PROMPT, transcript, "List every figure stated:",
+                                    MAX_NEW_TOKENS_EXTRACTION, temperature, route, "KEY FIGURES")).strip()
         if not focused or "none explicitly stated" in focused.lower():
             return content  # genuinely no figures — section will not be rendered
         items = self._bullets_to_list(focused)
@@ -1831,7 +1926,7 @@ class LLMManager:
                 return True
         return False
 
-    def _fill_action_items_json(self, content, transcript, temperature, route=None):
+    def _fill_action_items_json(self, content, transcript, temperature, route=None, ahead=None):
         """Run the focused action-item extraction and MERGE it with the main pass's items.
 
         This used to be gated on `if content.get("action_items"): return` — the fill ran only when
@@ -1849,11 +1944,9 @@ class LLMManager:
         """
         existing = [a for a in (content.get("action_items") or []) if isinstance(a, dict)]
         logger.info(f"[MOM] ACTION ITEMS — focused extraction pass [JSON] (main pass gave {len(existing)})")
-        focused = self.generate(
-            ACTION_ITEMS_EXTRACTION_PROMPT,
-            f"TRANSCRIPT:\n{transcript}\n\nList all action items:", MAX_NEW_TOKENS_EXTRACTION, temperature,
-            model=(route or {}).get("model"), api_base=(route or {}).get("api_base"),
-        ).strip()
+        focused = (ahead.result() if ahead is not None else  # asked already, beside the main read
+                   self._read_whole(ACTION_ITEMS_EXTRACTION_PROMPT, transcript, "List all action items:",
+                                    MAX_NEW_TOKENS_EXTRACTION, temperature, route, "ACTION ITEMS")).strip()
 
         merged = list(existing)
         seen = {self._task_key(a.get("task", "")) for a in existing}

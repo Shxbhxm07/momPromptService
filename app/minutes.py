@@ -11,9 +11,12 @@ Both ways in use it: the Kafka consumer (kafka_consumer.py) and POST /v1/mom-pro
 The clients it needs are built once, on first use, in setup.py.
 """
 import hashlib
+import json
 import logging
 import re
+import threading
 import time
+from concurrent.futures import Future
 from typing import Dict, List, Tuple
 
 import agenda_items
@@ -143,7 +146,46 @@ def _from_repository(job: KafkaJob, c: Clients, i: int, fid: str, name: str) -> 
     return name or fid, text
 
 
+# ONE RUN PER REQUEST (2026-09-22). "Try again" on the IMIR screen sent the same 227,000-character job while the first
+# was still running, and the pod did all the work twice, each copy at half speed. A request identical to one running
+# now — same conversation, prompt, files, template, header details and kind — waits for that run and is answered
+# with its result, under its own fields (queryId, clientSessionId… come back as it sent them).
+_RUNNING: Dict[str, Future] = {}
+_RUNNING_LOCK = threading.Lock()
+
+
+def _request_key(job: KafkaJob) -> str:
+    return json.dumps([job.tenant_id, job.conversation_id, job.prompt.strip(), job.file_urls, job.file_fids,
+                       job.document_ids, job.template_url, job.mom_meta, job.is_edit], sort_keys=True, default=str)
+
+
 def process(job: KafkaJob, c: Clients) -> dict:
+    """One job → an acknowledgement, or — when the very same request is already running — that run's result."""
+    key = _request_key(job)
+    with _RUNNING_LOCK:
+        running = _RUNNING.get(key)
+        if running is None:
+            mine = _RUNNING[key] = Future()
+    if running is not None:
+        logger.info(f"[JOB {job.conversation_id}] the same request is already running — waiting for it instead "
+                    "of doing the work again")
+        first = running.result()
+        desc = first.get("description") or ""
+        return build_ack(job, success=first.get("message") == "SUCCESS", bucket=first.get("summaryBucketName", ""),
+                         object_key=first.get("summaryObjectKey", ""), description=desc, limit=max(1, len(desc)))
+    try:
+        ack = _process(job, c)
+        mine.set_result(ack)
+        return ack
+    except BaseException as e:            # _process never raises; still, a waiting request must never hang
+        mine.set_exception(e)
+        raise
+    finally:
+        with _RUNNING_LOCK:
+            _RUNNING.pop(key, None)
+
+
+def _process(job: KafkaJob, c: Clients) -> dict:
     """One job → an acknowledgement. Never raises: a crash here would lose the ack."""
     t0 = time.time()
     try:
@@ -172,7 +214,7 @@ def process(job: KafkaJob, c: Clients) -> dict:
             raise ValueError(f"Too little to write minutes from: {chars} characters of prompt and document "
                              "text. Describe the meeting in the prompt, or attach its notes.")
         source = compose_source(job.prompt, documents)
-        if len(source) > MAX_SOURCE_CHARS:
+        if MAX_SOURCE_CHARS and len(source) > MAX_SOURCE_CHARS:
             raise ValueError(f"The documents are too long: {len(source)} characters, the limit is "
                              f"{MAX_SOURCE_CHARS}.")
 

@@ -40,7 +40,7 @@ def ocr_status() -> Dict[str, Any]:
     to miss; this names it the moment the pod starts, instead of on the first scanned upload.
     """
     status: Dict[str, Any] = {"engine": "tesseract", "enabled": ENABLE_OCR, "languages": OCR_LANGS,
-                              "dpi": OCR_DPI, "max_pages": OCR_MAX_PAGES,
+                              "dpi": OCR_DPI, "max_pages": OCR_MAX_PAGES or "no limit",
                               "scan_below_chars": MIN_PAGE_TEXT_CHARS}
     try:
         import pytesseract
@@ -71,9 +71,9 @@ def _startup():
     elif not ocr["ok"]:
         logger.error(f"OCR: {ocr['problem']}")
     else:
-        logger.info(f"OCR: Tesseract {ocr['version']}, languages {OCR_LANGS}, {OCR_DPI} dpi, up to "
-                    f"{OCR_MAX_PAGES} scanned pages per document, a page is a scan below "
-                    f"{MIN_PAGE_TEXT_CHARS} characters of its own text")
+        pages = f"up to {OCR_MAX_PAGES} scanned pages" if OCR_MAX_PAGES else "every scanned page"
+        logger.info(f"OCR: Tesseract {ocr['version']}, languages {OCR_LANGS}, {OCR_DPI} dpi, {pages} per document, "
+                    f"a page is a scan below {MIN_PAGE_TEXT_CHARS} characters of its own text")
 
 
 @app.on_event("shutdown")

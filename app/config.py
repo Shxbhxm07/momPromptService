@@ -19,10 +19,11 @@ ESSENCE_POINTS_PER_ITEM = int(os.getenv("ESSENCE_POINTS_PER_ITEM", "0"))
 # Below this many characters of prompt + document text there is no meeting to write up, and the model
 # would invent one. "Make the minutes of yesterday's meeting" is a request, not a source.
 MIN_SOURCE_CHARS = int(os.getenv("MIN_SOURCE_CHARS", "80"))
-# Above this the job is refused rather than sent: llama-service splits long text and calls the model per
-# part, so a 300-page file would be dozens of calls for minutes nobody asked for. ~75k tokens.
-MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "300000"))
-MAX_DOC_MB = int(os.getenv("MAX_DOC_MB", "50"))
+# NO SIZE LIMIT by default (the user's rule, 2026-09-22: "I do not want any limit"). A 290-page document was
+# refused at 300,000 characters. Long text is read in parts wherever the model cannot take it in one call, so
+# length costs time, not content. 0 = no limit; a number brings a limit back (characters / megabytes).
+MAX_SOURCE_CHARS = int(os.getenv("MAX_SOURCE_CHARS", "0"))
+MAX_DOC_MB = int(os.getenv("MAX_DOC_MB", "0"))
 
 # ── reading documents (utils/documents.py) ─────────────────────────────────────
 # OCR is Tesseract (the tesseract-ocr package in the image, with English and Hindi data), run in this
@@ -44,9 +45,15 @@ OCR_DPI = int(os.getenv("OCR_DPI", "300"))
 # here, since "hin,eng" reaches Tesseract as one language that does not exist and every scan fails.
 # Only languages installed in the image work (eng, hin) — /health and the startup log say if not.
 OCR_LANGS = "+".join(p for p in re.split(r"[\s,;+]+", os.getenv("OCR_LANGS", "eng+hin")) if p) or "eng+hin"
-# The most scanned pages read per document, at about a second each. Later scanned pages are skipped
-# with a warning in the log; typed pages are always read.
-OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "200"))
+# The most scanned pages read per document (about 7 s each on the cluster). 0 = every page, the default since
+# 2026-09-22: a limit here SKIPS the pages after it, and what they say is missing from the minutes.
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "0"))
+# Scanned pages read at the same time, each by its own Tesseract process (one CPU core each). The text is the same
+# as reading them one by one; only faster. Give the pod as many CPUs (requests.cpu in the Deployment).
+OCR_WORKERS = max(1, int(os.getenv("OCR_WORKERS", "4")))
+# Several Tesseracts at once each running its own OpenMP threads fight for the same cores; one thread each is faster.
+if OCR_WORKERS > 1:
+    os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 SOFFICE_TIMEOUT = int(os.getenv("SOFFICE_TIMEOUT", "180"))
 
 # ── MinIO ──────────────────────────────────────────────────────────────────────

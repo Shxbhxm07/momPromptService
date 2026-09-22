@@ -30,7 +30,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from config import (
     ENABLE_OCR,
@@ -38,6 +38,7 @@ from config import (
     OCR_DPI,
     OCR_LANGS,
     OCR_MAX_PAGES,
+    OCR_WORKERS,
     SOFFICE_TIMEOUT,
 )
 
@@ -271,22 +272,27 @@ def _extract_doc(raw: bytes) -> Extraction:
 
 # ── .pdf ─────────────────────────────────────────────────────────────────────
 
-def _ocr_page(page, ocr_lang: str) -> str:
-    import pytesseract
-
+def _render(page):
+    """The page as an image for OCR. pdfium is not thread-safe, so pages are rendered one at a time, in order."""
     # scale is a multiplier on PDF user space, which is 72 dpi — so this renders at
     # OCR_DPI. Devanagari needs the resolution: its matras are one or two pixels tall at
     # 150 dpi and tesseract drops them, turning ो into ा and changing the word.
     bitmap = page.render(scale=OCR_DPI / 72)
     try:
-        image = bitmap.to_pil()
-        try:
-            text = pytesseract.image_to_string(image, lang=ocr_lang) or ""
-            return _upright(image, text, ocr_lang) if _readable(text) < READABLE else text
-        finally:
-            image.close()
+        return bitmap.to_pil().copy()
     finally:
         bitmap.close()
+
+
+def _ocr_image(image, ocr_lang: str) -> str:
+    """The text of a rendered page. Tesseract runs as its own process, so several pages can be read at once."""
+    import pytesseract
+
+    try:
+        text = pytesseract.image_to_string(image, lang=ocr_lang) or ""
+        return _upright(image, text, ocr_lang) if _readable(text) < READABLE else text
+    finally:
+        image.close()
 
 
 # A SIDEWAYS OR UPSIDE-DOWN SCAN reads as junk, not as nothing: Tesseract does not turn a page the right
@@ -361,6 +367,19 @@ def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
             raise DocumentError("This PDF is password-protected. Upload an unlocked copy.")
         raise DocumentError(f"Could not read this PDF — it may be corrupt ({e}).")
 
+    # SCANNED PAGES ARE READ SEVERAL AT A TIME (2026-09-22): OCR is about 7 s a page on the cluster, so 290 scanned
+    # pages were ~34 minutes one after another. Each page is rendered here, in order, and read by one of OCR_WORKERS
+    # Tesseract processes; the text is put back in page order, so the document reads exactly as before. At most
+    # 2 x OCR_WORKERS rendered pages wait in memory (~26 MB each at 300 dpi).
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    def read(image, index):
+        text = _ocr_image(image, ocr_lang)
+        logger.info(f"[DOC] page {index + 1}/{n_pages} OCR'd ({len(text)} chars)")
+        return text
+
+    pool = ThreadPoolExecutor(max_workers=max(1, OCR_WORKERS))
+    pages_text: List[Any] = []         # per page: its text, or the OCR still running for it
     blocks: List[str] = []
     text_pages = ocr_pages = flattened = 0
     ocr_budget_hit = False
@@ -390,18 +409,24 @@ def _extract_pdf(raw: bytes, ocr_lang: str) -> Extraction:
                     text_pages += 1
                 elif not ENABLE_OCR:
                     continue
-                elif ocr_pages >= OCR_MAX_PAGES:
+                elif OCR_MAX_PAGES and ocr_pages >= OCR_MAX_PAGES:
                     ocr_budget_hit = True
                     continue
                 else:
-                    page_text = _ocr_page(page, ocr_lang)
+                    running = [p for p in pages_text if not isinstance(p, str) and not p.done()]
+                    if len(running) >= 2 * max(1, OCR_WORKERS):
+                        wait(running, return_when=FIRST_COMPLETED)
+                    pages_text.append(pool.submit(read, _render(page), index))
                     ocr_pages += 1
-                    logger.info(f"[DOC] page {index + 1}/{n_pages} OCR'd ({len(page_text)} chars)")
+                    continue
 
-                blocks.extend(_reflow(page_text.split("\n")))
+                pages_text.append(page_text)
             finally:
                 page.close()
+        for p in pages_text:
+            blocks.extend(_reflow((p if isinstance(p, str) else p.result()).split("\n")))
     finally:
+        pool.shutdown(wait=True)
         pdf.close()
 
     if flattened:

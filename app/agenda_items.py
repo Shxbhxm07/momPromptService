@@ -42,7 +42,7 @@ logger = logging.getLogger("agenda")
 # points out of seventy has not understood the meeting, and a near-empty ITEM II reads worse than one
 # honest ITEM I.
 MIN_PLACED = 0.5
-MAX_ITEMS = 12
+MAX_ITEMS = 50   # agenda entries past this get no ITEM of their own; was 12 until 2026-09-22 ("no limits")
 # Points are shown to the model shortened: it needs enough to recognise the subject, not the whole
 # sentence, and a 70-point meeting must still fit well inside the context.
 SNIPPET = 140
