@@ -241,7 +241,8 @@ def _last_person(state: Dict[str, Any], look_back: int = 5) -> int:
 def _about_person(ch: Any) -> bool:
     return isinstance(ch, dict) and (
         (ch.get("list") == "attendees" and ch.get("op") in ("set_role", "replace", "delete"))
-        or (ch.get("op") == "set_owner" and bool(_flat(ch.get("owner")))))
+        or (ch.get("op") == "set_owner" and bool(_flat(ch.get("owner"))))
+        or (ch.get("op") == "set_meta" and ch.get("field") == "secretary_name"))   # "make him the secretary"
 
 
 def _pronoun_target(state: Dict[str, Any], instruction: str) -> Tuple[str, int]:
@@ -272,6 +273,10 @@ def _resolve_pronoun(changes: List[Any], mom: Dict[str, Any], pronoun: str, last
                 logger.info(f"{tag} {pronoun!r} is {name} (changed last), not the line the model chose — "
                             f"{ch.get('op')} goes to {name}")
             ch = dict(ch, index=last, quote=_line_of(person))
+        elif _about_person(ch) and ch.get("op") == "set_meta":
+            if _flat(ch.get("value")) != name:
+                logger.info(f"{tag} {pronoun!r} is {name} (changed last) — secretary {_flat(ch.get('value'))!r} → {name}")
+            ch = dict(ch, value=name)
         elif _about_person(ch) and _flat(ch.get("owner")) != name:
             logger.info(f"{tag} {pronoun!r} is {name} (changed last) — owner {_flat(ch.get('owner'))!r} → {name}")
             ch = dict(ch, owner=name)

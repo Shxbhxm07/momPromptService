@@ -58,7 +58,8 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/templates/jssd_minutes.docx` | **the default minutes template**: JSSD Appendix AD as a Word file with `{{ slots }}`, editable in Word. Built by `tools/make_minutes_template.py` from `docx_export`'s building blocks; 38 layout rules pass on it |
 | `app/tidy_minutes.py` | code only, no model call, **never removes a fact**: a decision an action item already records is merged into it only when the kept line holds every number, name and all but one word of the other; owners written as the attendee list has them ("Rohit" → "Maj Rohit Negi", unique match only); after essence, a figure is dropped only when ONE printed point or decision holds all its numbers and every specific word of its label. No cap |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
-| `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text |
+| `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text. Plain-line replies ("0: 3, 7"), points first, then decisions and figures shown each item's points; what the model leaves out is placed by shared numbers/words |
+| `tests/` | **offline tests** — `sh tests/run.sh` (127 checks: re-prompting, questions, "his/her", spelling, replies, ITEM grouping). No model, no network; not in the image |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
@@ -551,7 +552,8 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   and YAML) prints every verified point; `MOM_WINDOW_CHARS` defaults to 1800, because the case for 6000 rested on essence
   dropping small finds anyway and 6000 was checked on only two transcripts. Calls with 1800 and the built-in savings:
   45 min 25 (was 27), 3 h 141 (was 153); 6000 gives 12 and 39 once the six-transcript test shows it loses nothing.
-  **The live Deployment still has ESSENCE_POINTS_PER_ITEM=4** — change it to 0 in the console.
+  ~~The live Deployment still has ESSENCE_POINTS_PER_ITEM=4~~ — **checked 2026-09-22 from the cluster log: it is 0.** The
+  2026-09-21 job had 22 points in 3 ITEMs and printed no "essence:" line, which a cap of 4 always prints.
 - **Nothing made up in the header — `xxx...xxx` for every missing detail, 2026-09-20.** The user saw a real job print
   "Tele: 0194-2450101", "Headquarters 99 Specimen Brigade", "RK Verma" and "HQ 15 Specimen Corps": the MADE-UP details
   of `templates/sample_template_unit.docx` (a test file from 2026-09-15), which had been attached to real jobs in IMIR
@@ -658,6 +660,20 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   Y.", "Nothing was changed. I did not add 'Col. Varma': that name is not in your message." Old values stay in
   every sentence ("(was …)"), because EARLIER REQUESTS needs them to set something back. 26 tests; the 29 + 24 + 21
   earlier ones and the 38 layout rules pass.
+- **Every decision and figure under the LAST ITEM — fixed 2026-09-22** (`app/agenda_items.py`). Cluster log: "reply hit
+  the 476-token limit and was cut off" — decisions and figures went to the model in ONE JSON call, the cut reply
+  could not be read, and leftovers went to the last item. Now: (1) replies are plain lines, one per agenda item
+  ("0: 3, 7, 12"), about half the tokens of the JSON, and a cut reply still gives every line before the cut;
+  (2) decisions and figures each get their own calls, AFTER the points, with each item's placed points listed under
+  its title (up to 10, 110 chars) — with the titles alone the real model put "collect batteries from the depot" and
+  "spare a clutch plate" under Water; shown the points, under the convoy, where the transcript has them; (3) a
+  decision or figure the model leaves out goes to the item whose title + points share the most numbers (3 each) and
+  words (1 each) with it, only when one item clearly wins (≥2, no tie); otherwise the last item, as before. No
+  second round when the points grouping fails. Real run (local, Llama 3.3 70B, scanned 5-min transcript, before the
+  round-two change): 21 decisions = 17 by the model + 2 matched + 2 last; 22 figures = 20 + 1 + 1; every line printed
+  exactly once. The OpenRouter credit ran out (402) during the next job, so the 15/30-minute scans, t1, meeting.pdf
+  and the re-prompt session were NOT run with the model — that is for the cluster. The offline tests now live in
+  `tests/` (they were lost with a session's scratch folder); 127 pass.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in
