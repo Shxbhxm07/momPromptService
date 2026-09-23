@@ -268,7 +268,11 @@ and with neither it is plain `MoM`. Characters that break keys, URLs or a Conten
 (see `_UNSAFE` in `kafka_contract.py`) become `_`; spaces and Hindi stay; at most 100
 characters. **The hash stays, as a folder**: the name alone would let two meetings uploaded as `notes.pdf`
 in one tenant overwrite each other, and an edit overwrite the version before it. An edit keeps the name
-of the version it changes (`minutes_edit._file_name`). Checked on a real MinIO: names with spaces, Hindi
+of the version it changes (`minutes_edit._file_name`).
+**Since 2026-09-23 every name ends in a unique number** — `MoM-notes-20260923143015123456.docx`, the UTC
+time to the microsecond (`kafka_contract.unique_number`) — because the hash repeats when the same minutes
+are made twice, and the second upload overwrote the first. Every upload is now a new object. An edit drops
+the old number and adds a new one (`minutes_edit._STORED_NAME`); the state file's key has no number. Checked on a real MinIO: names with spaces, Hindi
 and replaced characters store, read back and download through a presigned URL.
 
 **Where the ack goes.** A Kafka job → `mom-prompt.acks`. An HTTP job → the response body **and**

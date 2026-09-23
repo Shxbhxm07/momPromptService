@@ -13,6 +13,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -223,6 +224,11 @@ def build_ack(job: KafkaJob, *, success: bool, description: str,
     return ack
 
 
+def unique_number() -> str:
+    """20 digits, the UTC time to the microsecond: sorts in upload order, and never repeats in one pod."""
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
 def summary_object_key(job: KafkaJob, digest: str, ext: str = "docx", folder: str = "summaries",
                        name: str = "") -> str:
     """Tenant-scoped path: {tenantId}/summaries/{hash}/{name}.{ext}, or {hash}.{ext} with no name.
@@ -236,10 +242,15 @@ def summary_object_key(job: KafkaJob, digest: str, ext: str = "docx", folder: st
     (`summaries/MoM-notes.docx`) would let two meetings uploaded as "notes.pdf" in one tenant
     overwrite each other, and an edit overwrite the version before it. Under its own hash folder
     every version still has its own object, exactly as before, and downloads as `MoM-notes.docx`.
+
+    A UNIQUE NUMBER ENDS EVERY NAMED FILE (`MoM-notes-20260923143015123456.docx`, the UTC time to the
+    microsecond). The hash alone repeats when the same minutes are generated twice, and the second
+    upload then overwrote the first; with the number every upload is a new object. The state file
+    (no name) keeps its fixed key, because the next prompt has to find it again.
     """
     scope = (job.tenant_id or job.conversation_id or job.user_id or "shared").strip("/") or "shared"
     if name:
-        return f"{scope}/{folder}/{digest}/{name}.{ext}"
+        return f"{scope}/{folder}/{digest}/{name}-{unique_number()}.{ext}"
     return f"{scope}/{folder}/{digest}.{ext}"
 
 

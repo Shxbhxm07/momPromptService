@@ -819,8 +819,9 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
     return done, refused, undo
 
 
-# The name the first version was stored under: "{hash}/MoM-notes.docx" → "MoM-notes".
-_STORED_NAME = re.compile(r"(MoM(?:-.+)?)\.docx")
+# The name the first version was stored under: "{hash}/MoM-notes-<20-digit number>.docx" → "MoM-notes".
+# The number is dropped so an edit gets a fresh one instead of piling a second on the first.
+_STORED_NAME = re.compile(r"(MoM(?:-.+?)??)(?:-\d{20})?\.docx")
 
 
 def _file_name(state: Dict[str, Any], job: KafkaJob, mom: Dict[str, Any]) -> str:
