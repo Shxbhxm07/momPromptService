@@ -278,26 +278,9 @@ def validate(raw: Dict[str, Any], template_text: str) -> Tuple[Dict[str, Any], L
     return out, dropped
 
 
-# ── merging into the job's details ───────────────────────────────────────────────────────────────
+# The details a template may contribute. Merging them with the screen's fields, the user's prompt and what
+# earlier messages set is `header_values.collect` (2026-10-13) — one dictionary, one order of precedence.
 STANDING_FIELDS = ("telephone", "address", "file_ref", "secretary", "distribution")
-
-
-def merge(job_meta: Dict[str, Any], template: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-    """The job's own mom_meta wins, field by field; the template fills only what the job left empty.
-
-    Returns (meta for the renderer, the fields that came from the template).
-    """
-    meta = dict(job_meta or {})
-    used = []
-    for k in STANDING_FIELDS:
-        if k not in template:
-            continue
-        mine = meta.get(k)
-        empty = (not mine) or (k == "secretary" and isinstance(mine, dict) and not str(mine.get("name") or "").strip())
-        if empty:
-            meta[k] = template[k]
-            used.append(k)
-    return meta, used
 
 
 # ── orchestration ────────────────────────────────────────────────────────────────────────────────
@@ -335,7 +318,7 @@ def load(job, store) -> TemplateResult:
         document_checker.check(raw, name)          # type and size, as for any attachment
         # A FILL-IN TEMPLATE — a Word file with {{ slots }}, like templates/jssd_minutes.docx — is the
         # layout itself: it is filled with the minutes in place of the default one, and nothing is
-        # extracted from it. Every slot the job cannot fill prints "xxx...xxx".
+        # extracted from it. Every slot the job cannot fill prints "....xxxx....xxxx....".
         import minutes_template
         if minutes_template.is_fillable(raw):
             res.status, res.fillable = "fillable", raw
@@ -377,7 +360,7 @@ def load(job, store) -> TemplateResult:
     # telephone, address, file reference, secretary and distribution were printed as fact (2026-09-20).
     # Each value passed the checks — it IS in the template — so the filter above cannot see it. A real
     # unit's template never says "Specimen"; if any detail does, the whole template is a specimen and none
-    # of it is used: the minutes then show "xxx...xxx" where those details go.
+    # of it is used: the minutes then show "....xxxx....xxxx...." where those details go.
     if res.details and _SPECIMEN_WORD.search(json.dumps(res.details)):
         res.status = "specimen"
         res.reason = "its details say 'Specimen' — a sample template, not a unit's; none of them used"

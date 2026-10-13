@@ -2,6 +2,7 @@
 300,000 characters; scanned pages past 200 were skipped; decisions, actions and figures read the whole text in
 one call, which a document longer than the model can read would fail; a very large MoM could not be re-prompted."""
 import copy
+import json
 import os
 
 import agenda_items as ag
@@ -134,5 +135,117 @@ class Group:
 mom_module._get_writer = lambda: Group()
 g = ag.group({"agenda": agenda}, points, [], [])
 check("20 agenda entries → 20 ITEMs", g is not None and len(g) == 20, len(g or []))
+
+print("no answer is cut by a limit of ours")
+import threading
+import minutes_state
+from kafka_contract import build_ack, parse_job
+
+
+class Reply:
+    status_code = 200
+
+    def __init__(self, text, finish):
+        self.text, self.finish = text, finish
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"choices": [{"message": {"content": self.text}, "finish_reason": self.finish}]}
+
+
+class LongAnswer:
+    """The model's answer needs `need` tokens; with less room it comes back cut ("length")."""
+    def __init__(self, need, pad=False):
+        self.need, self.pad, self.budgets = need, pad, []
+
+    def post(self, url, json=None, **kw):
+        budget = json.get("max_tokens")
+        self.budgets.append(budget)
+        if budget >= self.need:
+            return Reply("x" * (self.need * 4), "stop")
+        return Reply(("x" * 10 + " " * (budget * 4)) if self.pad else "x" * (budget * 4), "length")
+
+
+lm._INFLIGHT = threading.BoundedSemaphore(8)
+mgr = lm.LLMManager()
+mgr.client = LongAnswer(need=9000)
+answer = mgr.generate("SYSTEM", "merge these partials", 5000, 0.0)
+check("a merge answer that needs 9,000 tokens: asked again with more room, returned whole",
+      len(answer) == 9000 * 4 and mgr.client.budgets == [5000, 10000], mgr.client.budgets)
+mgr.client = LongAnswer(need=900)
+answer = mgr.generate("SYSTEM", "group these", 544, 0.0)
+check("an ITEM grouping cut at 544 → 1,088, whole", len(answer) == 900 * 4 and mgr.client.budgets == [544, 1088],
+      mgr.client.budgets)
+mgr.client = LongAnswer(need=100)
+mgr.generate("SYSTEM", "short question", 1500, 0.0)
+check("a normal answer is ONE call with the normal allowance", mgr.client.budgets == [1500], mgr.client.budgets)
+mgr.client = LongAnswer(need=10 ** 9, pad=True)
+mgr.generate("SYSTEM", "window", 1500, 0.0)
+check("blank-space padding (the known runaway) is not given more room", mgr.client.budgets == [1500],
+      mgr.client.budgets)
+mgr.client = LongAnswer(need=10 ** 9)
+huge = "y" * int((lm.MODEL_CONTEXT_LIMIT - 8000) * 3)      # leaves ~7,700 tokens for the answer
+mgr.generate("SYSTEM", huge, 4000, 0.0)
+check("room never goes past the model's window", all(b <= lm.MODEL_CONTEXT_LIMIT for b in mgr.client.budgets)
+      and len(mgr.client.budgets) >= 2, mgr.client.budgets)
+
+print("a repair redoes only the merge, not the parts")
+calls.clear()
+
+
+class Parts(lm.LLMManager):
+    def __init__(self):          # no connection: only the model calls are replaced
+        pass
+
+    def generate(self, system, user, *a, **k):
+        calls.append("part" if "TRANSCRIPT SECTION" in user else "merge")
+        return '{"title": "x"}'
+
+
+memo = {}
+long_text = "The committee met and discussed the water supply at length. " * 5000
+Parts()._generate_json_raw(long_text, 0.0, len(long_text) // 4, route={"model": "m", "api_base": "b", "context_limit": 32768},
+                                 memo=memo)
+first = list(calls)
+calls.clear()
+Parts()._generate_json_raw(long_text, 0.0, len(long_text) // 4, strict=True,
+                                 route={"model": "m", "api_base": "b", "context_limit": 32768}, memo=memo)
+check("first try: every part + one merge", first.count("part") > 3 and first.count("merge") == 1, first)
+check("repair: the merge only", calls == ["merge"], calls)
+
+print("re-prompting and replies: nothing cut")
+many_changes = [{"op": "delete", "list": "key_points", "index": i, "quote": big["key_points"][i][:40]} for i in range(60)]
+m2 = copy.deepcopy(big)
+done, refused, _ = me.apply(m2, {}, many_changes, "delete the first sixty points")
+check("60 changes in one message: all 60 made (the cap was 40)", len(done) == 60 and not refused, (len(done), refused[:2]))
+longline = {"title": "t", "key_points": ["A" * 900 + " end of a long point"], "attendees": [], "agenda": [],
+            "decisions": [], "action_items": [], "key_figures": []}
+check("a long line is shown to the model whole (it was cut at 160)", "end of a long point" in me._shown(longline, {}))
+job = parse_job({"tenant_id": "t", "conversationId": "c"})
+check("a re-prompt reply is not cut", len(build_ack(job, success=True, description="Done. " + "x " * 2000, limit=0)
+                                          ["description"]) > 3000)
+check("a new MoM's description is still its first sentence (<= 400)",
+      len(build_ack(job, success=True, description="y " * 2000)["description"]) <= 400)
+store = type("S", (), {"files": {}, "upload": lambda self, k, d, t: self.files.__setitem__(k, d)})()
+minutes_state.save(job, store, mom={"title": "t"}, meta={}, template={}, object_key="k", bucket="b",
+                   history=[{"mom": {"n": i}} for i in range(25)])
+saved = json.loads(list(store.files.values())[0])
+check("undo keeps every version (it kept 10)", len(saved["history"]) == 25, len(saved["history"]))
+
+print("ITEMs: every agenda entry")
+
+
+class Sixty:
+    def generate(self, system, user, **kw):
+        if "\nPOINTS:\n" in user:
+            return "\n".join(f"{k}: {k}" for k in range(60))
+        return ""
+
+
+mom_module._get_writer = lambda: Sixty()
+g = ag.group({"agenda": [f"Subject {k}" for k in range(60)]}, [f"About subject {k}" for k in range(60)], [], [])
+check("60 agenda entries → 60 ITEMs (the cap was 50)", g is not None and len(g) == 60, len(g or []))
 
 print(f"\n{ok} passed, {fail} failed")

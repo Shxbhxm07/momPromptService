@@ -192,14 +192,14 @@ def build_ack(job: KafkaJob, *, success: bool, description: str,
     On failure the bucket/key are omitted rather than sent empty: an empty objectKey reads as
     "there is a file at ''" to anything that tries to fetch it.
 
-    `limit`: the longest description, `_MAX_DESCRIPTION` unless given — an answer to a user's question
-    about the minutes (minutes_edit) is allowed more than one sentence.
+    `limit`: the longest description, `_MAX_DESCRIPTION` unless given; 0 = no cut. A new MoM is described by its
+    summary's first sentence (the backend's reference ack); a reply to a re-prompt or a question is sent whole.
     """
     from config import ACK_FAILURE_MESSAGE
 
     desc = " ".join((description or "").split())
-    most = limit or _MAX_DESCRIPTION
-    if len(desc) > most:
+    most = _MAX_DESCRIPTION if limit is None else limit
+    if most and len(desc) > most:
         desc = desc[:most - 1].rsplit(" ", 1)[0] + "…"
 
     ack: Dict[str, Any] = dict(job.echo)

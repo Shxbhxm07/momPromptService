@@ -2,7 +2,7 @@
 service-letter template the user gave as the reference (2026-09-20).
 
 The layout lives in the Word file; the service only supplies values (app/minutes_template.py). Every value
-is a named slot — {{ venue }}, {%p for a in attendees %} — and a slot with no value prints "xxx...xxx".
+is a named slot — {{ venue }}, {%p for a in attendees %} — and a slot with no value prints "....xxxx....xxxx....".
 Open the result in Word and change anything: wording, fonts, spacing, fixed lines. Slots are listed in
 templates/README.md.
 

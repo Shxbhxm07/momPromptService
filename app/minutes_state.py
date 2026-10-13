@@ -28,7 +28,7 @@ logger = logging.getLogger("state")
 SCHEMA = 1
 # How many past versions to keep for undo. Each is one MoM (~15 KB of JSON), so ten is cheap and is
 # far more than the handful of corrections a user makes in one sitting.
-MAX_HISTORY = 10
+MAX_HISTORY = 0            # versions kept for undo; 0 = all of them (was 10 until 2026-09-22: "no limits")
 
 
 def key_for(job: KafkaJob) -> str:
@@ -59,7 +59,7 @@ def save(job: KafkaJob, store, *, mom: Dict[str, Any], meta: Dict[str, Any], tem
         # What produced this version: "" for the original job, the user's words for an edit.
         "instruction": instruction,
         "changes": changes or [],
-        "history": (history or [])[-MAX_HISTORY:],
+        "history": (history or [])[-MAX_HISTORY:] if MAX_HISTORY else list(history or []),
         # The documents these minutes came from — how a follow-up message is recognised (minutes_edit).
         "sources": sorted(sources or []),
     }

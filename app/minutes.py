@@ -22,6 +22,7 @@ from typing import Dict, List, Tuple
 import agenda_items
 import document_checker
 import essence
+import header_values
 import figures_check
 import meeting_date
 import model_notes
@@ -172,7 +173,7 @@ def process(job: KafkaJob, c: Clients) -> dict:
         first = running.result()
         desc = first.get("description") or ""
         return build_ack(job, success=first.get("message") == "SUCCESS", bucket=first.get("summaryBucketName", ""),
-                         object_key=first.get("summaryObjectKey", ""), description=desc, limit=max(1, len(desc)))
+                         object_key=first.get("summaryObjectKey", ""), description=desc, limit=0)
     try:
         ack = _process(job, c)
         mine.set_result(ack)
@@ -208,28 +209,28 @@ def _process(job: KafkaJob, c: Clients) -> dict:
         so_far = dict((previous or {}).get("meta") or {})
         if not job.prompt and not job.file_urls and not job.file_fids:
             raise ValueError("Nothing to write minutes from: the job has no prompt and no file_urls.")
+        # EVERY HEADER VALUE IN ONE DICTIONARY (2026-10-13): the screen's fields and buttons first, then what
+        # the user labelled in the prompt ("Tele: …", "Venue: …"), then earlier messages of this conversation,
+        # then the HQ's template. A value nobody gave stays absent and prints "....xxxx....xxxx....".
+        # The prompt's header lines are taken OUT of the text the minutes are written from: they are details of
+        # the document, not things said at the meeting.
+        template = template_details.load(job, c.store)
+        meta, where, prompt_text = header_values.collect(job, template.details, so_far)
+        from_template = sorted(f for f, w in where.items() if w == "the template")
         documents = _read_documents(job, c)
-        chars = len(job.prompt) + sum(len(t) for _, t in documents)
+        chars = len(prompt_text) + sum(len(t) for _, t in documents)
         if chars < MIN_SOURCE_CHARS:
             raise ValueError(f"Too little to write minutes from: {chars} characters of prompt and document "
                              "text. Describe the meeting in the prompt, or attach its notes.")
-        source = compose_source(job.prompt, documents)
+        source = compose_source(prompt_text, documents)
         if MAX_SOURCE_CHARS and len(source) > MAX_SOURCE_CHARS:
             raise ValueError(f"The documents are too long: {len(source)} characters, the limit is "
                              f"{MAX_SOURCE_CHARS}.")
 
-        # The template, if any, is read on its own path and never joins `source`: its specimen text
-        # would otherwise pass the writer's grounding check and reach the minutes. Only its validated
-        # standing details come back, and the job's own mom_meta wins over them field by field.
-        # load() never raises — a bad template costs its details, not the job.
-        template = template_details.load(job, c.store)
-        meta, from_template = template_details.merge(job.mom_meta, template.details)
-        # What the user gave in earlier messages beats the template; the job's own mom_meta beats both.
-        for k, v in so_far.items():
-            if v and not job.mom_meta.get(k):
-                meta[k] = v
-
-        mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
+        # The template is read on its own path (above) and never joins `source`: its specimen text would
+        # otherwise pass the writer's grounding check and reach the minutes. load() never raises — a bad
+        # template costs its details, not the job.
+        mom = to_mom_response(c.llm.generate(source, _metadata(meta)))
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
 

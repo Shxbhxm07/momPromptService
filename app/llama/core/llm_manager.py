@@ -407,8 +407,39 @@ class LLMManager:
     def generate(self, system_prompt: str, user_message: str, max_new_tokens: int, temperature: float,
                  frequency_penalty: float = 0.0, presence_penalty: float = 0.0,
                  model: str = None, api_base: str = None, extra: dict = None) -> str:
-        """Generate text using vLLM API (OpenAI compatible).
-        frequency_penalty/presence_penalty default to 0.0 → unchanged for every existing caller;
+        """The model's answer, NEVER CUT BY A LIMIT OF OURS (2026-09-22, the user's rule: "I do not want any kind of
+        limit"). Each caller gives a first allowance sized for a normal answer, which keeps normal calls quick;
+        an answer that runs past it is asked for again with twice the room, up to what is left of the model's
+        window (IBM: 131,072 tokens for question + answer; MODEL_CONTEXT_LIMIT here). On the cluster a merge
+        answer cut at 5,000 tokens made the whole 12-part read run a second time, and ITEM groupings were cut at
+        544 and 596. A reply that is mostly blank space is the known runaway (the model pads to the limit), not a
+        long answer: it is not given more room."""
+        budget = int(max_new_tokens)
+        while True:
+            text, cut = self._generate_once(system_prompt, user_message, budget, temperature, frequency_penalty,
+                                            presence_penalty, model, api_base, extra)
+            if not cut:
+                return text
+            room = self._answer_room(system_prompt, user_message, model)
+            bigger = min(room, budget * 2)
+            if bigger <= budget or len(text) < 0.5 * budget:     # no room left, or blank-space padding
+                logger.warning(f"[LLM] reply cut off at {budget} tokens and cannot be given more room — "
+                               f"output is incomplete")
+                return text
+            logger.info(f"[LLM] reply ran past {budget} tokens — asking again with room for {bigger}")
+            budget = bigger
+
+    def _answer_room(self, system_prompt: str, user_message: str, model: str = None) -> int:
+        """Tokens left for an answer in the model's window after this question (at a cautious 3 characters a
+        token, 1.5 for Devanagari), less a small margin."""
+        limit = MODEL_CONTEXT_LIMIT_LONG if (LLM_MODEL_LONG and model == LLM_MODEL_LONG) else MODEL_CONTEXT_LIMIT
+        asked = (len(system_prompt) + len(user_message)) / _chars_per_token(user_message)
+        return max(0, int(limit - asked - 256))
+
+    def _generate_once(self, system_prompt, user_message, max_new_tokens, temperature, frequency_penalty=0.0,
+                       presence_penalty=0.0, model=None, api_base=None, extra=None):
+        """ONE answer from the API (OpenAI-compatible or watsonx), and whether it was cut off at `max_new_tokens`:
+        (text, cut). frequency_penalty/presence_penalty default to 0.0 → unchanged for every existing caller;
         the MoM path sets them >0 for non-English to prevent CJK repetition loops.
         model/api_base default to the configured pair — the MoM path overrides them when a long
         transcript is routed to the big-context model (see _route)."""
@@ -449,11 +480,8 @@ class LLMManager:
                                                 headers={"Authorization": f"Bearer {self._bearer(key)}"})
                 response.raise_for_status()
                 content, finish_reason = self._parse_reply(response.json(), url)
-                if finish_reason == "length":
-                    # A cut-off reply used to pass through as if it were complete, and a JSON caller then
-                    # saw only a parse error. Say so here, where the cause is actually known.
-                    logger.warning(f"[LLM] reply hit the {self._budget(payload)}-token limit and was cut "
-                                   f"off — output is incomplete")
+                # A cut-off reply is reported to generate(), which asks again with more room.
+                cut = finish_reason == "length"
                 if content is None:
                     # gpt-oss-120b is a REASONING model: it can spend its ENTIRE output budget on internal
                     # reasoning (sometimes looping) and return {"content": null, "reasoning": "..."} with no
@@ -477,8 +505,8 @@ class LLMManager:
                         "vLLM still returned content=None after the extended retry — returning empty "
                         "(never leak reasoning into user-facing output)."
                     )
-                    return ""
-                return content.strip()
+                    return "", False
+                return content.strip(), cut
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < 3:
                     wait = RETRY_DELAYS[attempt]
@@ -930,7 +958,9 @@ class LLMManager:
     def _mom_json_steps(self, text, temperature, output_lang, metadata, text_len, estimated_tokens,
                         _mtype, _focus, route, ahead):
         """The JSON pipeline's steps, in order; `ahead` holds the reads already asked for (see above)."""
-        raw, chunks_used = self._generate_json_raw(text, temperature, estimated_tokens, focus=_focus, route=route)
+        memo = {}
+        raw, chunks_used = self._generate_json_raw(text, temperature, estimated_tokens, focus=_focus, route=route,
+                                                   memo=memo)
         logger.info(f"[MOM] JSON generated ({len(raw)} chars, chunks={chunks_used}, type={_mtype})")
 
         content, ok = parse_and_validate(raw)
@@ -938,7 +968,8 @@ class LLMManager:
             logger.info("[MOM] JSON validated")
         else:
             logger.warning("[MOM] Repair retry")
-            raw, _ = self._generate_json_raw(text, 0.0, estimated_tokens, strict=True, focus=_focus, route=route)
+            raw, _ = self._generate_json_raw(text, 0.0, estimated_tokens, strict=True, focus=_focus, route=route,
+                                             memo=memo)
             content, ok = parse_and_validate(raw)
             if not ok:
                 raise ValueError("JSON invalid after deterministic repair + retry")
@@ -1059,9 +1090,11 @@ class LLMManager:
         are "general", which adds no emphasis at all."""
         return "general", TEMPLATE_FOCUS.get("general", "")
 
-    def _generate_json_raw(self, text, temperature, estimated_tokens, strict=False, focus="", route=None):
+    def _generate_json_raw(self, text, temperature, estimated_tokens, strict=False, focus="", route=None, memo=None):
         """Run the JSON-emitting prompts (single-pass or chunk+synthesise). Returns (raw_json, chunks).
-        `focus` is the auto-detected meeting-type focus appended to the system prompts (schema unchanged)."""
+        `focus` is the auto-detected meeting-type focus appended to the system prompts (schema unchanged).
+        `memo`: kept between the first try and the repair try — the chunks' partial answers are read once, and a
+        repair redoes only the merge (it used to read all 12 parts of t5.docx again, ~2 minutes)."""
         strict_note = "\n\nReturn ONLY the JSON object — no prose, no code fences." if strict else ""
         analysis_sys = MEETING_ANALYSIS_PROMPT_JSON + focus
         synthesis_sys = SYNTHESIS_PROMPT_JSON + focus
@@ -1109,8 +1142,14 @@ class LLMManager:
             return self.generate(analysis_sys, chunk_prompt, MAX_NEW_TOKENS_PER_CHUNK, temperature,
                                  model=m, api_base=ab)
 
-        with ThreadPoolExecutor(max_workers=max(1, LLM_CONCURRENCY)) as pool:
-            partials = list(pool.map(one_chunk, enumerate(chunks)))
+        if memo is not None and memo.get("partials") and len(memo["partials"]) == len(chunks):
+            partials = memo["partials"]
+            logger.info(f"[MOM] repair: the {len(chunks)} parts already read are merged again — not read again")
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, LLM_CONCURRENCY)) as pool:
+                partials = list(pool.map(one_chunk, enumerate(chunks)))
+            if memo is not None:
+                memo["partials"] = partials
 
         combined = self._join_partials(partials, "\n\n=== PARTIAL JSON ===\n\n")
         synthesis_prompt = (

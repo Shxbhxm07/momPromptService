@@ -18,7 +18,7 @@ FOUR GUARDS, none optional:
   2. INVENTED DETAIL — names and numbers in new text must already appear in the user's instruction,
      the minutes, or the header. The model cannot supply a due date nobody gave.
   3. CLASSIFICATION is never CHANGED from chat text: a misread "remove the secret part" must not
-     declassify a document. One the job never gave (printed "xxx...xxx") may be FILLED — only with the
+     declassify a document. One the job never gave (printed "....xxxx....xxxx....") may be FILLED — only with the
      one grade word the user wrote ("mark it restricted"), never with one the model inferred.
   4. NOTHING ELSE MOVES — untouched lines are copied exactly, and the ITEM grouping is remapped from
      the old minutes to the new rather than worked out again, so items do not reshuffle.
@@ -46,23 +46,17 @@ logger = logging.getLogger("edit")
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-MAX_CHANGES = 40
 MAX_REPLY_TOKENS = 2000
-SNIPPET = 160                 # how much of each line the model is shown; enough to recognise it
 MIN_QUOTE = 8                 # a shorter quote proves nothing about which line was meant
-ANSWER_CHARS = 1500           # the longest answer to a question sent back in the ack's description
 
-# Every header detail the minutes print — each shows "xxx...xxx" until someone provides it, and the user may
+# Every header detail the minutes print — each shows "....xxxx....xxxx...." until someone provides it, and the user may
 # provide any of them in a later prompt, in any wording (the user's rule, 2026-09-20). Classification only
 # under guard 3.
 EDITABLE_META = {"venue", "meeting_date", "meeting_time", "telephone", "address", "file_ref", "issue_date",
                  "precedence", "copy_no", "classification", "amendments_by", "secretary_name", "secretary_rank",
                  "distribution"}
-MISSING = "xxx...xxx"
-# The grades, longest first so "top secret" is not also read as "secret"; the abbreviations are Part 1's.
-_GRADE_WORDS = [("TOP SECRET", r"top\s+secret"), ("CONFIDENTIAL", r"confidential|confd"),
-                ("RESTRICTED", r"restricted|restd"), ("UNCLASSIFIED", r"unclassified|unclas"),
-                ("SECRET", r"secret")]
+from docx_export import MISSING                     # one placeholder, defined in the renderer
+from header_values import GRADES as _GRADE_WORDS, grade_of as _grade_of, grades_in as _grades_in
 LISTS = ("key_points", "decisions", "action_items", "agenda", "attendees", "key_figures")
 
 _SYSTEM = """You are given MINUTES already written from a meeting, and one INSTRUCTION from the user asking to change them.
@@ -98,8 +92,8 @@ Rules:
 - value, role, owner and due each hold only their own text. The [role: …], [owner: …] and [due: …] after a line
   show how the minutes are laid out: never copy them into value. Adding "Teena as an intern in AI" is
   value "Teena", role "intern in AI".
-- A header field showing xxx...xxx was never provided: fill it when the user gives it, in the user's words.
-- classification: only when the HEADER shows xxx...xxx for it, and only the grade the user wrote (RESTRICTED,
+- A header field showing ....xxxx....xxxx.... was never provided: fill it when the user gives it, in the user's words.
+- classification: only when the HEADER shows ....xxxx....xxxx.... for it, and only the grade the user wrote (RESTRICTED,
   CONFIDENTIAL, SECRET, TOP SECRET or UNCLASSIFIED). A classification already set cannot be changed here;
   answer "cannot" if asked.
 - If the instruction asks for something that needs the original meeting document read again (for example "focus more on the budget"), answer "cannot".
@@ -156,7 +150,7 @@ def _line_of(item: Any) -> str:
 
 def _numbered(items: List[Any], keep: Optional[set] = None) -> str:
     """The list as numbered lines — only the indices in `keep` when given, each still under its own number."""
-    lines = [f"{i}. {_line_of(v)[:SNIPPET]}" for i, v in enumerate(items) if keep is None or i in keep]
+    lines = [f"{i}. {_line_of(v)}" for i, v in enumerate(items) if keep is None or i in keep]   # whole lines
     if keep is not None and len(keep) < len(items):
         lines.append(f"(… {len(items) - len(keep)} more lines not shown — only lines sharing a word with the "
                      "INSTRUCTION are listed)")
@@ -221,7 +215,7 @@ def _fitted(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, most: i
 
 
 def _shown(mom: Dict[str, Any], meta: Dict[str, Any], keep: Optional[Dict[str, set]] = None) -> str:
-    """The minutes as the model sees them: every header field, xxx...xxx where it was never provided. `keep`:
+    """The minutes as the model sees them: every header field, ....xxxx....xxxx.... where it was never provided. `keep`:
     for a list named in it, only those line numbers (see _fitted)."""
     sec = meta.get("secretary") if isinstance(meta.get("secretary"), dict) else {}
     address = meta.get("address")
@@ -363,22 +357,7 @@ def _ask(mom: Dict[str, Any], meta: Dict[str, Any], instruction: str, earlier: s
 
 
 # ── guard 3: a classification is filled only from the user's own word, and never changed ─────────────
-def _grades_in(text: str) -> List[str]:
-    """Every grade the text names, longest first, each span counted once ("top secret" is not "secret")."""
-    found, rest = [], (text or "").lower()
-    for grade, pattern in _GRADE_WORDS:
-        rx = re.compile(rf"\b(?:{pattern})\b")
-        if rx.search(rest):
-            found.append(grade)
-            rest = rx.sub(" ", rest)
-    return found
-
-
-def _grade_of(value: str) -> str:
-    grades = _grades_in(value)
-    return grades[0] if len(grades) == 1 else ""
-
-
+# (_grades_in / _grade_of live in header_values, which reads the same grades out of a first prompt.)
 def _classification_refused(meta: Dict[str, Any], value: str, instruction: str) -> str:
     """Why this classification may not be set, or "" when it may."""
     if _flat(meta.get("classification")):
@@ -634,7 +613,7 @@ def apply(mom: Dict[str, Any], meta: Dict[str, Any], changes: List[Dict[str, Any
     # Deletions are collected and applied at the end: removing as we go would shift every later index.
     to_delete: Dict[str, set] = {name: set() for name in LISTS}
 
-    for ch in changes[:MAX_CHANGES]:
+    for ch in changes:                      # every change asked for (there was a cap of 40 until 2026-09-22)
         if not isinstance(ch, dict):
             continue
         ch = _labels(ch)
@@ -866,7 +845,7 @@ def previous_state(job: KafkaJob, c: Clients) -> Optional[Dict[str, Any]]:
     replaces, or None for a new meeting (a different document). Never raises.
 
     Two things carry over from it: the header details the user gave in earlier messages — the telephone or
-    address must not fall back to xxx...xxx — and the history, with the replaced version on top, so "undo"
+    address must not fall back to ....xxxx....xxxx.... — and the history, with the replaced version on top, so "undo"
     brings back the minutes and every change the user made to them. Until 2026-09-21 the rewrite started a
     fresh history, and a question answered "cannot" cost the user all their edits with no way back."""
     try:
@@ -887,7 +866,7 @@ def follow_up(job: KafkaJob, c: Clients) -> Optional[dict]:
     message carries the same document(s) or none. Tried as an edit; None when it is not one.
 
     The IMIR frontend sends every follow-up as a new job, re-attaching the file (seen 2026-09-20: "add tele
-    9654396200" re-read the PDF, wrote the minutes again, and the telephone stayed xxx...xxx). A DIFFERENT
+    9654396200" re-read the PDF, wrote the minutes again, and the telephone stayed ....xxxx....xxxx....). A DIFFERENT
     document is a new meeting, and so are minutes too old to know what they were written from (saved before
     `sources` existed) when the message brings a file. Never raises.
     """
@@ -950,7 +929,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             logger.info(f"{tag} answered a question in {time.time()-t0:.0f}s — the minutes are unchanged")
             return build_ack(job, success=True, bucket=state.get("summary_bucket") or "",
                              object_key=state.get("summary_object_key") or "", description=answer,
-                             limit=ANSWER_CHARS)
+                             limit=0)
         # UNDO FIRST, THEN THE REST. "revert the change to Gupta and update Ariz Khan's position" used to do
         # only the undo — the rest was silently dropped. The other changes are now applied to the restored
         # version, each checked against it (a quote that no longer matches is refused and said so).
@@ -1038,7 +1017,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         if answer:
             said += f" {answer}"
         return build_ack(job, success=True, bucket=bucket, object_key=key, description=said,
-                         limit=ANSWER_CHARS if answer else None)
+                         limit=0)
     except Exception as e:
         logger.error(f"{tag} edit failed after {time.time()-t0:.0f}s: {e}")
         # ValueError is only ever raised here with a sentence meant for the user, so it is passed on

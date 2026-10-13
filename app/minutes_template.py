@@ -7,8 +7,8 @@ is JSSD Appendix AD, built by tools/make_minutes_template.py from docx_export's 
 to the manual by tools/check_jssd_layout.py. A job may attach its own template with slots instead (see
 template_details: status "fillable"); then that one is filled.
 
-EVERY SLOT HAS A VALUE OR "xxx...xxx" — the user's rule: "everything is customisable; if the particular value
-is present then use that value from the transcript, otherwise xxx...xxx". That includes a slot the service
+EVERY SLOT HAS A VALUE OR "....xxxx....xxxx...." — the user's rule: "everything is customisable; if the particular value
+is present then use that value from the transcript, otherwise ....xxxx....xxxx....". That includes a slot the service
 does not know (a client's typo or a new field): it prints the marker instead of vanishing silently.
 
 Slots (templates/README.md has them with examples):
@@ -42,7 +42,7 @@ DEFAULT_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tem
 
 
 class _Missing(jinja2.ChainableUndefined):
-    """A slot the context does not carry prints "xxx...xxx", loops over nothing and is false in {% if %}."""
+    """A slot the context does not carry prints "....xxxx....xxxx....", loops over nothing and is false in {% if %}."""
 
     def __str__(self) -> str:
         return MISSING
@@ -80,7 +80,8 @@ def _title_lines(mom: Dict[str, Any], meta: Dict[str, Any]) -> List[str]:
             lines[-1] += " " + phrase
         else:
             lines.append(phrase)
-    return [line.upper().rstrip(".").replace(MISSING.upper(), MISSING) for line in lines]
+    shown = [line.upper().replace(MISSING.upper(), MISSING) for line in lines]
+    return [x[:-1] if x.endswith(".") and not x.endswith(MISSING) else x for x in shown]   # keep MISSING's dots
 
 
 def _attendees(mom: Dict[str, Any], number: int) -> List[Dict[str, str]]:

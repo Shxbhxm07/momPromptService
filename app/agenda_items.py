@@ -42,10 +42,10 @@ logger = logging.getLogger("agenda")
 # points out of seventy has not understood the meeting, and a near-empty ITEM II reads worse than one
 # honest ITEM I.
 MIN_PLACED = 0.5
-MAX_ITEMS = 50   # agenda entries past this get no ITEM of their own; was 12 until 2026-09-22 ("no limits")
-# Points are shown to the model shortened: it needs enough to recognise the subject, not the whole
-# sentence, and a 70-point meeting must still fit well inside the context.
-SNIPPET = 140
+# Every agenda entry gets its ITEM (there was a cap of 12, then 50, until 2026-09-22: "no limits").
+# Points are shown to the model WHOLE (they were cut to 140 characters until 2026-09-22, "no limits"): a batch
+# of POINT_BATCH points is a few thousand tokens, far inside the model's window.
+SNIPPET = None
 # Points per call. A reply then lists at most this many indices, whatever the meeting's length.
 POINT_BATCH = 80
 # Reply budget: an index is ~2 tokens on a plain line ("12, "); twice that leaves room for a model that lists a
@@ -177,7 +177,6 @@ def group(mom: Dict[str, Any], points: List[str], decisions: List[Any], figures:
     agenda = [re.sub(r"\s+", " ", str(a)).strip() for a in (mom.get("agenda") or []) if str(a).strip()]
     if len(agenda) < 2 or not points:
         return None                      # one agenda entry is one ITEM: today's behaviour already
-    agenda = agenda[:MAX_ITEMS]
     said = [d[0] if isinstance(d, (list, tuple)) else str(d) for d in decisions]
 
     # Two rounds. Points first, in batches of POINT_BATCH; then decisions and figures, each in calls of their own,

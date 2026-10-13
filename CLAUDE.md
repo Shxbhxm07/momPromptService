@@ -45,6 +45,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
 | `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
+| `app/header_values.py` | **every header value in ONE dictionary** — the screen's fields and buttons (`mom_meta`, `metaData`, `grading`), the values the user LABELLED in the prompt ("Tele: …", "Venue: …", read by code, never the model, and taken out of the text the minutes are written from), earlier messages, then the template. The screen wins; what nobody gave prints `....xxxx....xxxx....` |
 | `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
 | `tools/check_jssd_layout.py` | **the layout conformance check** — renders a specimen and asserts 38 rules of the manual on it, page by page. Run after any `docx_export.py` change |
 | `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
@@ -54,12 +55,12 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/model_notes.py` | drops the model's own preamble and footnotes printed as business ("Decision. Here are the action items extracted from the meeting transcript:", "Note: … some assumptions have been made"). Same test (`llama.utils.text_utils.is_model_note`) as the writer's `_bullets_to_list`, where they came from |
 | `app/figures_check.py` | drops a line carrying a number that is in the writer's PROMPTS but not in the source (the figures prompt's examples "$51,840", "7,30,340" were printed in a New Zealand meeting's minutes), and, when the source never mentions rupees, removes "(Rs …)" and lakh grouping. Spoken numbers count as present |
 | `app/repository.py` | **"From repository" files**: a file whose id is a repository id (24 hex, e.g. `6aad24087fb955220d1ad0cf`) is read from the platform's index (`REPOSITORY_INDEX`, `teamsync_v1`) — all chunks of that `fId` in pageNo/para order, overlaps removed, NOT routed. "Attach file" uploads (key ends in a UUID) are read from MinIO. `file_fids` are repository ids. Read-only |
-| `app/minutes_template.py` | **fills the minutes TEMPLATE** (docxtpl): builds every slot's value from the minutes and the job — `xxx...xxx` when absent, also for a slot it does not know (`_Missing`) — fills the job's own fill-in template or the default, then the page count (two passes, LibreOffice) and the watermark. See *Templates* |
+| `app/minutes_template.py` | **fills the minutes TEMPLATE** (docxtpl): builds every slot's value from the minutes and the job — `....xxxx....xxxx....` when absent, also for a slot it does not know (`_Missing`) — fills the job's own fill-in template or the default, then the page count (two passes, LibreOffice) and the watermark. See *Templates* |
 | `app/templates/jssd_minutes.docx` | **the default minutes template**: JSSD Appendix AD as a Word file with `{{ slots }}`, editable in Word. Built by `tools/make_minutes_template.py` from `docx_export`'s building blocks; 38 layout rules pass on it |
 | `app/tidy_minutes.py` | code only, no model call, **never removes a fact**: a decision an action item already records is merged into it only when the kept line holds every number, name and all but one word of the other; owners written as the attendee list has them ("Rohit" → "Maj Rohit Negi", unique match only); after essence, a figure is dropped only when ONE printed point or decision holds all its numbers and every specific word of its label. No cap |
 | `app/meeting_date.py` | blanks the writer's meeting date unless the source gives it as THIS meeting's ("held on", "Date:", "today is"…) — it once took the date of the previous meeting's minutes |
 | `app/agenda_items.py` | sorts the verified points, decisions and figures under the agenda items so the minutes carry **ITEM I, II, III** as Appendix AD draws them. Index numbers only — it never writes text. Plain-line replies ("0: 3, 7"), points first, then decisions and figures shown each item's points; what the model leaves out is placed by shared numbers/words |
-| `tests/` | **offline tests** — `sh tests/run.sh` (163 checks: re-prompting, questions, "his/her", spelling, replies, ITEM grouping, no limits, speed). No model, no network; not in the image. `fake_model.py` is a stand-in model with realistic delays |
+| `tests/` | **offline tests** — `sh tests/run.sh` (214 checks: re-prompting, questions, "his/her", spelling, replies, ITEM grouping, no limits, speed). No model, no network; not in the image. `fake_model.py` is a stand-in model with realistic delays |
 | `app/logger_config.py` | log format and level. Timestamps are UTC; the user reads IST (UTC+5:30) |
 | `app/mom.py` | `MomGenerator` (calls /summarize) + `to_mom_response` (**copied** from `~/offline-mom-api/api/core/mom.py`) |
 | `app/minio_client.py` | copied **unchanged** from `api/core/storage.py` |
@@ -125,14 +126,14 @@ cp app/docx_export.py ~/offline-mom-api/api/utils/docx_export.py     # then comm
 
 **Since 2026-09-20 the minutes ARE a template.** The user gave a docxtpl service-letter template as the
 model ("make our template like that … everything customisable; the value from the transcript, otherwise
-xxx...xxx"). `docx_export.build_mom_docx` now fills `app/templates/jssd_minutes.docx` (via
+....xxxx....xxxx...."). `docx_export.build_mom_docx` now fills `app/templates/jssd_minutes.docx` (via
 `minutes_template.render`); a job whose `template_url` is a Word file WITH slots (`{{ … }}`/`{% … %}`,
 `template_status: fillable`) is filled instead, and edits re-fetch it (its URL is in the state). A template
 that cannot be filled falls back to the default, and the default to `docx_export._build_direct` — the old
 code-built layout — so no job loses its minutes to a template. Filled from the default, the 38-rule check
 passes; compared page by page with the code-built minutes, the text differs ONLY where the user's rule adds
-`xxx...xxx` (an unstated appointment, purpose or agenda; Action and Info against a decision nobody owns).
-14 tests with a client's own template (its wording kept, values filled, an unknown slot → xxx...xxx, an edit
+`....xxxx....xxxx....` (an unstated appointment, purpose or agenda; Action and Info against a decision nobody owns).
+14 tests with a client's own template (its wording kept, values filled, an unknown slot → ....xxxx....xxxx...., an edit
 keeps the layout, a broken template → the default, the service-letter template itself fills). Templates
 WITHOUT slots are still read as below. The 2026-09-15 decision below rejected "tagged {{placeholders}}"
 only because official templates had none; a fill-in template is now the user's own choice.
@@ -169,7 +170,7 @@ the minutes follow the manual and are English.
 
 **A follow-up needs no marker (2026-09-20).** The IMIR frontend sends every follow-up as a NEW job, with the file
 re-attached and no `mode` — "add tele 9654396200" re-read the PDF, wrote the minutes again, took the sentence for
-something said, and the telephone stayed xxx...xxx. Now `minutes_edit.follow_up`: a message on a conversation that
+something said, and the telephone stayed ....xxxx....xxxx..... Now `minutes_edit.follow_up`: a message on a conversation that
 already has minutes, carrying the SAME document(s) (`sources` in the saved state: MinIO keys, "fid:<id>") or none,
 is tried as an edit first. If the model answers only "cannot" (not a change to these minutes — "focus more on the
 budget", a question), the minutes are written again as before, KEEPING the header details the user gave earlier
@@ -191,12 +192,12 @@ its target by INDEX and quoting the line it means. Code applies them. **Four gua
 2. **Invented detail** — names and numbers in new text must already be in the instruction, the minutes or the
    header ("31 Dec 2027" is refused when the user said "30 Sep"). Months are matched Sep/September either way.
 3. **A classification is never CHANGED from chat text**, so a misread "remove the secret part" cannot
-   declassify a document. One the job never gave ("xxx...xxx") may be FILLED — only with the one grade word
+   declassify a document. One the job never gave ("....xxxx....xxxx....") may be FILLED — only with the one grade word
    the user wrote ("mark it restricted"; "top secret" is never read as "secret"). Every other header detail
    is fillable (`EDITABLE_META`, 2026-09-20 — "user can write anything in re-prompting, it can be any missing
    item"): venue, date, time, telephone, address (lines split on ";" or ","), file reference, date of issue,
    precedence, copy number, amendments date, secretary, distribution ("addressee | copies | remarks" rows;
-   copies nobody gave print "xxx...xxx"). The model is shown "xxx...xxx" against each missing field, and for a
+   copies nobody gave print "....xxxx....xxxx...."). The model is shown "....xxxx....xxxx...." against each missing field, and for a
    header value EVERY capitalised word and number must be in the user's words — the sentence rule skipped
    the first word, so an invented one-word venue ("Dhanpur") got through.
 4. **Nothing else moves** — untouched lines are copied exactly, and `_regroup` remaps the ITEM grouping from
@@ -558,11 +559,11 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   45 min 25 (was 27), 3 h 141 (was 153); 6000 gives 12 and 39 once the six-transcript test shows it loses nothing.
   ~~The live Deployment still has ESSENCE_POINTS_PER_ITEM=4~~ — **checked 2026-09-22 from the cluster log: it is 0.** The
   2026-09-21 job had 22 points in 3 ITEMs and printed no "essence:" line, which a cap of 4 always prints.
-- **Nothing made up in the header — `xxx...xxx` for every missing detail, 2026-09-20.** The user saw a real job print
+- **Nothing made up in the header — `....xxxx....xxxx....` for every missing detail, 2026-09-20.** The user saw a real job print
   "Tele: 0194-2450101", "Headquarters 99 Specimen Brigade", "RK Verma" and "HQ 15 Specimen Corps": the MADE-UP details
   of `templates/sample_template_unit.docx` (a test file from 2026-09-15), which had been attached to real jobs in IMIR
-  as the unit's template. The user's rule: "if any information is not provided … put xxx...xxx. DO NOT MAKE something
-  from yourself." Now (1) `docx_export.MISSING = "xxx...xxx"` prints for the telephone, address, file reference and
+  as the unit's template. The user's rule: "if any information is not provided … put ....xxxx....xxxx..... DO NOT MAKE something
+  from yourself." Now (1) `docx_export.MISSING = "....xxxx....xxxx...."` prints for the telephone, address, file reference and
   its date, the title's place/time/date, each ITEM's classification ("(UNCLASSIFIED)" only when the job says so), the
   secretary's name and rank, the amendments date and the distribution — replacing "(Initials and Name)"/"Rank", the
   dotted line and the silent omissions; precedence and copy number still appear only when given (the manual uses them
@@ -573,7 +574,7 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   template, or none.
 - **Any missing item can be filled by a re-prompt — 2026-09-20** (see *Editing*, guard 3). 20 tests: one prompt filling
   address, telephone, file reference + date of issue, precedence, secretary, amendments date, distribution and
-  classification leaves a single "xxx...xxx" (the copies nobody gave); refused: a number the user never typed, changing
+  classification leaves a single "....xxxx....xxxx...." (the copies nobody gave); refused: a number the user never typed, changing
   a job-set classification, "top secret" read as SECRET, a grade the prompt never names, an invented one-word venue.
   The backend must send the re-prompt with `mode: "edit"` and the SAME conversationId — otherwise it is a new meeting.
 - **An edit saves its state LAST — 2026-09-20.** It used to save the new state to MinIO before updating Elasticsearch;
@@ -717,6 +718,41 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   End to end on the local stack with the stand-in model: scanned 15-min PDF and t5, each with a "Try again" sent
   while running — one run each, both requests got the same file. `tests/t_speed.py` 12 checks; 163 in all; 38 layout
   rules pass. NOT done: bigger windows (MOM_WINDOW_CHARS) — faster but could miss small points (accuracy rule).
+- **No answer cut by a limit of ours — 2026-09-22** ("I do not want any kind of limit"). The first cluster run with
+  the speed work (t5, 482 s instead of ~20 min) showed the merge answer cut at MAX_NEW_TOKENS_SYNTHESIS (5,000 —
+  its input is no longer trimmed to 16k, so its answer is longer), which made the whole 12-part read run AGAIN
+  (~2 min), and two ITEM-grouping answers cut at 544 and 596. Those numbers are OURS (the `max_tokens` we send);
+  IBM gives Llama 3.3 70B 131,072 tokens for question + answer and states no separate answer cap. Now:
+  `generate()` → `_generate_once()` reports whether an answer was cut; if so it is asked again with twice the room,
+  up to what is left of the window (`_answer_room`: MODEL_CONTEXT_LIMIT less the question at 3 chars/token), so a
+  normal answer still costs one quick call; a reply that is mostly blank space (the known runaway) is not grown.
+  A repair of the main read reuses the parts already read (`memo`) and redoes only the merge. Also removed:
+  ITEM cap (every agenda entry gets an ITEM), 40 changes per re-prompt, lines cut to 160 characters for the edit
+  model and to 140 for the grouping model, 400/1,500-character cuts on re-prompt and answer replies (`build_ack`
+  limit=0; a NEW MoM's description stays its summary's first sentence, the backend's reference), undo history of
+  10 (`MAX_HISTORY` 0 = all). Kept on purpose, as guards not limits: MIN_SOURCE_CHARS (80 — below it the model
+  invents a meeting), MIN_QUOTE (8), the 5 earlier requests shown to the edit model, MODEL_CONTEXT_LIMIT (how much
+  one call reads; longer text is split, nothing dropped). `tests/t_limits.py` 37 checks; 176 in all; 38 layout rules.
+- **One dictionary of header values, the screen first — 2026-10-13** (`app/header_values.py`). Asked for: "collect
+  template values from user prompts and UI fields/buttons, store them in a single dictionary, and dynamically
+  populate the template. If values conflict, prioritize UI inputs." Order: the SCREEN (`mom_meta`, header keys
+  inside `metaData` when it is a JSON object, `grading` when that button names a grade), then the PROMPT, then
+  earlier messages of the conversation (`previous_state`), then the template's standing details; `collect()`
+  returns the dictionary, where each value came from (logged per job: "header values: the screen: …; the prompt:
+  …; not given: 6 of 13") and the prompt with its header lines removed. THE PROMPT IS READ BY CODE, not the
+  model: only LABELLED values ("Tele:", "Venue:", "File ref: … dt …", "Secretary:", "Address:", "Distribution:",
+  "Classification:") — the label decides the field, so "Venue: IAF Head Quarters" can never land in the meeting
+  time (a real cluster mistake, 2026-09-22); a value over 300 characters, or a classification naming no grade, is
+  ignored. What is taken LEAVES `compose_source`, so "Tele: 0194-2450101" is a header detail, not something said
+  at the meeting. `template_details.merge` is gone (one order of precedence now); `_grades_in`/`_grade_of` moved
+  to `header_values` and `minutes_edit` imports them, so a first prompt and a re-prompt read grades the same way.
+  **The placeholder is now `....xxxx....xxxx....`** (was "xxx...xxx"), defined once in `docx_export.MISSING` and
+  imported by `minutes_template` and `minutes_edit`; the title's full-stop trim keeps its trailing dots.
+  `tests/t_header.py`, 38 checks (prompt only, screen only, both — the screen wins —, earlier messages, the
+  template, and the Word file: values printed, placeholder for the rest); 214 offline checks and the 38 layout
+  rules pass. End to end on the job path with the stand-in model: the screen's venue beat the prompt's, the
+  prompt's telephone, file reference and secretary printed, `grading` set the classification, and the telephone
+  appears once — in the header, not as a minuted line.
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

@@ -138,7 +138,7 @@ check("an invented name is not passed on", ack["description"] == "I could not an
       ack["description"])
 long = "The minutes say the water line in Block C will be repaired by the evening of 24 September. " * 25
 ack = send("explain the water problem", [ch(op="answer", value=long)])
-check("a long answer is kept up to 1500 characters", 1400 < len(ack["description"]) <= 1500, len(ack["description"]))
+check("a long answer is sent whole (no limit)", ack["description"] == " ".join(long.split()), len(ack["description"]))
 ack = send("add Hav Mohan Lal and tell me who attended",
            [ch(op="add", list="attendees", value="Hav Mohan Lal"),
             ch(op="answer", value="Maj Rohit Negi, Shubham Pandey and Teena attended.")])

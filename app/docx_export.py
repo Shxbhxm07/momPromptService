@@ -14,8 +14,8 @@ edition). Each rule below cites where it comes from:
 WHAT A RECORDING CANNOT SUPPLY. The superscription (telephone, precedence, address, file reference),
 the security classification, the secretary and the distribution are never spoken in a meeting. They
 come from `meta` — the Kafka job's `mom_meta`, or the HQ's template — and print as MISSING
-("xxx...xxx") when absent: never guessed, never filled from anywhere else. The classification is never
-inferred: with none given the pages carry no marking and each ITEM's bracket reads "(xxx...xxx)"; a
+("....xxxx....xxxx....") when absent: never guessed, never filled from anywhere else. The classification is never
+inferred: with none given the pages carry no marking and each ITEM's bracket reads "(....xxxx....xxxx....)"; a
 wrong grading on a defence document is worse than none.
 
 ONE ITEM FOR NOW. AD records each agenda item as its own block (ITEM I, ITEM II …) ending in its
@@ -63,12 +63,15 @@ SIGNATURE_FEEDS = 9            # AD: "as required, usually nine" line feeds down
 LINES_PER_PAGE = 42            # only for the fallback page-count estimate
 DOTS = "……………"                # AD marks what the secretary fills in with a row of dots.
 # WHAT PRINTS WHERE THE LAYOUT NEEDS A DETAIL NOBODY PROVIDED — the user's rule, 2026-09-20: "if any
-# information is not provided for something then put xxx...xxx. DO NOT MAKE something from yourself."
+# information is not provided for something then put ....xxxx....xxxx..... DO NOT MAKE something from yourself."
 # Telephone, address, file reference and its date, the title's place, time and date, each ITEM's
 # classification, the secretary, the amendments date and the distribution: given by the job, the template
 # or the source, or this. One marker everywhere, so the gaps to fill are plain at a glance. Precedence and
 # copy number are not gaps when absent — the manual uses them only when they apply.
-MISSING = "xxx...xxx"
+# What a value nobody gave prints as (the user's wording, 2026-10-13; it was "xxx...xxx"). One place only:
+# minutes_template and minutes_edit import it from here, so the Word file, the model's view of the header
+# and every message say the same thing.
+MISSING = "....xxxx....xxxx...."
 
 # ── security classification ──────────────────────────────────────────────────────────────────────
 # Written in full: Part 1 para 12.1 — never abbreviated in service writing.
@@ -481,7 +484,9 @@ def _title(doc, mom, meta):
             lines.append(phrase)
     p = _fmt(doc.add_paragraph(), align=CENTRE, keep=True)
     for i, line in enumerate(lines):
-        r = _run(p, line.upper().rstrip(".").replace(MISSING.upper(), MISSING), bold=True)
+        shown = line.upper().replace(MISSING.upper(), MISSING)
+        shown = shown[:-1] if shown.endswith(".") and not shown.endswith(MISSING) else shown   # keep MISSING's dots
+        r = _run(p, shown, bold=True)
         if i < len(lines) - 1:
             r.add_break()
 
