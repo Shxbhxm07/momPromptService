@@ -131,8 +131,18 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
                                 "value": {**{k: v for k, v in _EXAMPLE.items()
                                              if k not in ("file_urls", "document_names")},
                                           "template_url": "mom/templates/hq-jssd-template.docx",
-                                          "template_name": "hq-jssd-template.docx"}}})):
+                                          "template_name": "hq-jssd-template.docx"}},
+        "documents_and_questionnaire": {
+            "summary": "documents and a questionnaire, as the correspondence service takes them",
+            "value": {**{k: v for k, v in _EXAMPLE.items() if k not in ("file_urls", "document_names")},
+                      "documents": [{"fid": "momp-001", "miniourl": "mom/mom-docs/budget-review-notes.pdf",
+                                     "fileName": "budget-review-notes.pdf"}],
+                      "questionnaire": [{"question": "file reference number", "answer": "AMCID12323"},
+                                        {"question": "telephone number", "answer": "1334675"}]}}})):
     """Minutes from a prompt and/or documents: the Kafka job, over HTTP.
+
+    `documents` ([{fid, miniourl, fileName}]) and `questionnaire` ([{question, answer}]) are read as the
+    correspondence service reads them. A questionnaire answer beats the prompt, and the prompt beats the documents.
 
     200 carries the SUCCESS acknowledgement; 422 (no prompt and no file), 503 (MinIO or Elasticsearch
     unreachable) and 500 (the job failed) carry a FAILURE acknowledgement saying why.
@@ -140,7 +150,8 @@ def mom_prompt(payload: Dict[str, Any] = Body(..., openapi_examples={
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="The body must be a JSON object, like a Kafka job.")
     job = parse_job(payload)
-    if not job.prompt and not job.file_urls and not job.file_fids:
+    # A questionnaire alone can change minutes this conversation already has (minutes_edit.follow_up).
+    if not job.prompt and not job.file_urls and not job.file_fids and not job.questionnaire:
         return _answer(422, build_ack(
             job, success=False, description="No prompt and no file_urls: nothing to write minutes from."))
     try:

@@ -45,6 +45,7 @@ every module imports its neighbours by plain name (`from config import ...`).
 | `app/config.py` | every setting, from env. Shared names/defaults match `~/offline-mom-api/api/config.py` |
 | `app/setup.py` | MinIO, Elasticsearch and minutes-writer clients, made once on first use (not at startup) |
 | `app/document_checker.py` | size limit and file-type check for an attachment, with the message the user gets |
+| `app/header_fields.py` | **the header by priority** (2026-10-14): the job's `questionnaire` then `mom_meta` → the prompt → earlier messages → the documents → the template. Questions matched to fields by wording (`ALIASES`, typos too); every answer also a template slot. The prompt and the documents are read by one short call each beside the writer; a value is kept only if written in that text |
 | `app/template_details.py` | the official JSSD **template** → the HQ's standing details (gate, one model call, grounding, specimen filter, merge, cache). See *Templates* |
 | `tools/check_jssd_layout.py` | **the layout conformance check** — renders a specimen and asserts 38 rules of the manual on it, page by page. Run after any `docx_export.py` change |
 | `app/minutes_edit.py` | **the second prompt**: changes the minutes already written instead of writing them again. The model answers with CHANGES only — never text for the document — and four guards check them. See *Editing* |
@@ -228,6 +229,12 @@ cluster test shows.
   When `file_urls` is absent, `path` is used instead — but **only** if it ends `.pdf`, `.docx`, `.doc` or `.txt`,
   so the backend's `"path": "AsItIs"` marker never becomes a download. Same as the audio service otherwise.
 - `document_names`, `document_ids`, `tenant_id`, `conversation_id` / `conversationId`.
+- `documents` (optional, 2026-10-14): the correspondence service's shape, `[{"fid", "miniourl", "fileName"}]`.
+  `miniourl` is added to `file_urls` (after them) with `fileName` as its name; an entry with only a `fid` goes to
+  `file_fids`. With `documents`, `path` is never taken as a file.
+- `questionnaire` (optional, 2026-10-14): `[{"question", "answer"}]` (also a plain `{question: answer}`, or either
+  as JSON text). The job's own header values — they beat `mom_meta`, the prompt and the documents. See
+  `header_fields.py`. Neither `documents` nor `questionnaire` is echoed in the ack (they are inputs).
 - `mom_meta` (optional): JSSD details no text contains: classification, file_ref, meeting_date,
   meeting_time, venue, secretary, distribution… (see `~/offline-mom-api/docs/kafka-contract.md`).
 - `template_url` / `templateUrl`, `template_name` / `templateName` (optional): the issuing HQ's **official
@@ -717,6 +724,34 @@ to the HTTP body, 22 of 22 fields of the backend's reference ack.
   End to end on the local stack with the stand-in model: scanned 15-min PDF and t5, each with a "Try again" sent
   while running — one run each, both requests got the same file. `tests/t_speed.py` 12 checks; 163 in all; 38 layout
   rules pass. NOT done: bigger windows (MOM_WINDOW_CHARS) — faster but could miss small points (accuracy rule).
+- **`documents` + `questionnaire`, and the header by priority — 2026-10-14** (`app/header_fields.py`). The user's
+  rule: a value given in the questionnaire beats the prompt, and the prompt beats the documents. Before this, a
+  new job took header details (telephone, file reference, address, secretary…) ONLY from mom_meta, earlier
+  messages and the template — never from the prompt or the documents. Now two short model calls, run beside the
+  writer (no added time), read them from the prompt (every field; classification only as the one grade it names,
+  "top secret" never SECRET) and from the documents (only telephone, address, file reference, secretary,
+  distribution — a source document's own date/copy no/classification are not the minutes'; its venue/date/time
+  stay the writer's). Each value must be written in its text (words in order, months/ordinals/punctuation
+  aside), not a placeholder. Order: questionnaire > mom_meta > prompt > earlier messages > documents > template;
+  the secretary is taken as one person (a lower layer's name/rank only when no higher layer named one).
+  Questionnaire answers are ALSO template slots (`{{ file_reference_number }}`, any custom question), and the
+  header fields answer to every alias name; the answers are saved in meta["fields"] so edits keep them. In an
+  edit or follow-up the questionnaire is applied after the chat's changes (form wins), counts as a change (a
+  form-only follow-up is an edit, not a rewrite; a question + a form change is answered AND changed).
+  ANY question works (2026-10-14, second pass, found by `tests/t_service.py`): Hindi questions (slot names keep
+  Devanagari vowel signs; nukta-free variants too; Hindi aliases), bracketed hints ignored ("Date (DD/MM/YYYY)"),
+  more wordings ("Ph. No.", "Mobile", "Meeting held at/on", "Address of HQ", "Meeting start time"), "…of next
+  meeting" never matched; answers kept by their question as asked (`{{ questionnaire["Agenda"] }}` for a slot a
+  built-in owns); answer types → text (Yes/No, `a ; b`, `key: value`). Also fixed: prompt/document values were run
+  through the TEMPLATE specimen filter, which refused real words "Nagin Range" / "Firing Practice" — they now face
+  only `template_details.is_placeholder`; templates keep the full `is_specimen`.
+  `tests/t_service.py` (85 checks) drives the real FastAPI app and the Kafka message path with stand-in MinIO,
+  Elasticsearch and model, and opens every stored Word file.
+  `tests/t_questionnaire.py`, 91 checks, run locally (no Docker on this machine); the other suites pass locally
+  except t_spelling (no wordlist on Windows, fails the same before the change) and a pre-existing race in
+  t_limits ("each part opens with the end of the one before" checks parallel calls in arrival order; 1 in 12 runs
+  fails on the unchanged code too). NOT run with the real model: the two new calls are the
+  template_details pattern (JSON schema on watsonx).
 - **Tasks printed as `Decision.` are CORRECT — do not "fix" it.** Checked 2026-09-18 against the manual:
   JSSD minutes have no action-item section. A task the meeting settles IS a decision (para 9: "the decisions
   made and the action required"; 16.15: minutes are executive orders), with the responsible appointment in

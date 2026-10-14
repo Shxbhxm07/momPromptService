@@ -37,6 +37,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import header_fields
 import minutes_state
 from docx_export import build_mom_docx, flatten_items
 from kafka_contract import KafkaJob, build_ack, summary_file_name, summary_object_key
@@ -835,6 +836,33 @@ def _file_name(state: Dict[str, Any], job: KafkaJob, mom: Dict[str, Any]) -> str
     return stored.group(1) if stored else summary_file_name(job, mom.get("title") or "")
 
 
+def _from_form(job: KafkaJob, mom: Dict[str, Any], meta: Dict[str, Any]) -> List[str]:
+    """Put the job's questionnaire answers into `mom` and `meta`; a sentence for each value that changed."""
+    fields, answers = header_fields.from_questionnaire(job.questionnaire)
+    done = []
+    title = fields.pop("title", "")
+    if title and _flat(mom.get("title")) != _flat(title):
+        was = _flat(mom.get("title"))
+        mom["title"] = title
+        done.append(f"The title is now {title}" + (f" (was {was})" if was else "") + " (from the form)")
+    for field, value in fields.items():
+        was = _meta_text(meta, field)
+        header_fields.put(meta, field, value)
+        now = _meta_text(meta, field)
+        if now != was:
+            done.append(f"The {_FIELD[field]} is now {now}" + (f" (was {was})" if was else "") + " (from the form)")
+    old = meta.get("fields") if isinstance(meta.get("fields"), dict) else {}
+    before = header_fields.slots(old)                  # "Venue" and "venue" are one question
+    for question, answer in answers.items():
+        slot = header_fields.slot_name(question) or question
+        was = before.get(slot) if header_fields.slot_name(question) else old.get(question)
+        if was != answer and not header_fields.field_of(question):
+            done.append(f"{question} is now {answer}" + (f" (was {was})" if was else "") + " (from the form)")
+    if answers:
+        meta["fields"] = {**old, **answers}
+    return done
+
+
 def _fillable_template(state: Dict[str, Any], c: Clients, tag: str) -> Optional[bytes]:
     """The job's fill-in template, fetched again, so the edited minutes keep the layout they had. The
     default template when there was none, or it can no longer be read (logged, never fatal)."""
@@ -892,7 +920,7 @@ def follow_up(job: KafkaJob, c: Clients) -> Optional[dict]:
     `sources` existed) when the message brings a file. Never raises.
     """
     try:
-        if not job.prompt.strip() or not job.conversation_id:
+        if not (job.prompt.strip() or job.questionnaire) or not job.conversation_id:
             return None
         state = minutes_state.load(job, c.store)
         if not _same_minutes(job, state):
@@ -918,7 +946,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
     tag = f"[JOB {job.conversation_id}]"
     try:
         instruction = job.prompt.strip()
-        if not instruction:
+        if not instruction and not job.questionnaire:
             raise ValueError("An edit needs a prompt saying what to change.")
         state = state or minutes_state.load(job, c.store)
         if not state:
@@ -935,7 +963,10 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
         if pronoun and last >= 0:
             earlier += (f'\n- ("{pronoun}" in the INSTRUCTION means {_flat(mom["attendees"][last].get("name"))}, '
                         f"the person changed last: ATTENDEES line {last})")
-        data = _ask(mom, meta, instruction, earlier)
+        # Does the job's questionnaire change anything? Then this message is a change even when its prompt is a
+        # question or cannot be done as one — the form is applied below, after the chat's own changes.
+        form_changes = bool(_from_form(job, copy.deepcopy(mom), copy.deepcopy(meta)))
+        data = _ask(mom, meta, instruction, earlier) if instruction else {}
         changes = data.get("changes") if isinstance(data.get("changes"), list) else []
         logger.info(f"{tag} edit: {len(changes)} change(s) proposed for {instruction[:70]!r}")
         # A QUESTION IS ANSWERED, NOTHING CHANGES. "can you explain me the agenda of this meeting" used to come
@@ -946,7 +977,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
                    if isinstance(ch, dict) and ch.get("op") == "answer" and _flat(ch.get("value"))]
         changes = [ch for ch in changes if not (isinstance(ch, dict) and ch.get("op") == "answer")]
         answer = _answer_checked(answers, mom, meta, instruction, tag) if asked else ""
-        if asked and all(isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
+        if asked and not form_changes and all(isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
             logger.info(f"{tag} answered a question in {time.time()-t0:.0f}s — the minutes are unchanged")
             return build_ack(job, success=True, bucket=state.get("summary_bucket") or "",
                              object_key=state.get("summary_object_key") or "", description=answer,
@@ -967,7 +998,7 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
             changes = _resolve_pronoun(changes, mom, pronoun, last, tag)
         base_meta = copy.deepcopy(meta)
         done, refused, _ = apply(mom, meta, changes, instruction, earlier)
-        if follow and not done and not undo and all(
+        if follow and not done and not undo and not form_changes and all(
                 isinstance(ch, dict) and ch.get("op") == "cannot" for ch in changes):
             logger.info(f"{tag} not a change to the minutes ({refused[0] if refused else 'no change proposed'}) — "
                         "writing them again from the document")
@@ -993,6 +1024,10 @@ def process(job: KafkaJob, c: Clients, follow: bool = False,
                         f"{len(refused2)} refused — {'used' if better else 'first answer kept'}")
             if better:
                 mom, meta, done, refused = mom2, meta2, done2, refused2
+
+        # THE FORM WINS (2026-10-14): the job's own values come before what the chat says — the user's order of
+        # priority — so the questionnaire is applied last, over the changes above.
+        done += _from_form(job, mom, meta)
 
         if not done and not undo:
             reason = refused[0] if refused else "I could not find anything in the minutes that matches your message"

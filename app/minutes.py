@@ -16,13 +16,14 @@ import logging
 import re
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Tuple
 
 import agenda_items
 import document_checker
 import essence
 import figures_check
+import header_fields
 import meeting_date
 import model_notes
 import minutes_state
@@ -156,7 +157,8 @@ _RUNNING_LOCK = threading.Lock()
 
 def _request_key(job: KafkaJob) -> str:
     return json.dumps([job.tenant_id, job.conversation_id, job.prompt.strip(), job.file_urls, job.file_fids,
-                       job.document_ids, job.template_url, job.mom_meta, job.is_edit], sort_keys=True, default=str)
+                       job.document_ids, job.template_url, job.mom_meta, job.questionnaire, job.is_edit],
+                      sort_keys=True, default=str)
 
 
 def process(job: KafkaJob, c: Clients) -> dict:
@@ -220,18 +222,29 @@ def _process(job: KafkaJob, c: Clients) -> dict:
 
         # The template, if any, is read on its own path and never joins `source`: its specimen text
         # would otherwise pass the writer's grounding check and reach the minutes. Only its validated
-        # standing details come back, and the job's own mom_meta wins over them field by field.
+        # standing details come back, and they fill only what nothing else gave.
         # load() never raises — a bad template costs its details, not the job.
         template = template_details.load(job, c.store)
-        meta, from_template = template_details.merge(job.mom_meta, template.details)
-        # What the user gave in earlier messages beats the template; the job's own mom_meta beats both.
-        for k, v in so_far.items():
-            if v and not job.mom_meta.get(k):
-                meta[k] = v
-
-        mom = to_mom_response(c.llm.generate(source, _metadata(job.mom_meta)))
+        # THE HEADER, BY PRIORITY (the user's rule, 2026-10-14): the job's own values (questionnaire, then
+        # mom_meta), then the prompt, then — as before — what the user gave in earlier messages, then the
+        # documents, then the template. The prompt and the documents are read by two short calls BESIDE the
+        # minutes writer, so they cost no time. See header_fields.
+        tag = f"[JOB {job.conversation_id}]"
+        given, title = header_fields.inputs(job)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            in_prompt = pool.submit(header_fields.read, "prompt", job.prompt, given, tag)
+            in_docs = pool.submit(header_fields.read, "documents", "\n\n".join(t for _, t in documents), given, tag)
+            mom = to_mom_response(c.llm.generate(source, _metadata(given)))
+            from_prompt, from_docs = in_prompt.result(), in_docs.result()
         if not any(mom.get(k) for k in ("summary", "key_points", "decisions", "action_items")):
             raise RuntimeError("no minutes produced")
+        meta, came_from = header_fields.merge(given, [("prompt", from_prompt), ("earlier messages", so_far),
+                                                      ("documents", from_docs), ("template", template.details)])
+        from_template = came_from.get("template", [])
+        if any(came_from.values()):
+            logger.info(f"{tag} header: " + "; ".join(f"{', '.join(v)} from the {k}" for k, v in came_from.items()))
+        if title:
+            mom["title"] = title                # the form's title beats the one the writer chose
 
         # The model's own preamble and footnotes, printed as business in a real run: "Decision. Here are
         # the action items extracted from the meeting transcript:". See model_notes.
@@ -252,7 +265,7 @@ def _process(job: KafkaJob, c: Clients) -> dict:
         # With no meeting_date in mom_meta the title takes the writer's, and the writer has taken it
         # from another meeting — "approval of the February 17 2022 meeting minutes". Kept only when the
         # source gives it as this meeting's date; see meeting_date for the test.
-        dropped = meeting_date.check(mom, source, job.mom_meta.get("meeting_date"))
+        dropped = meeting_date.check(mom, source, meta.get("meeting_date"))
         if dropped:
             logger.info(f"[JOB {job.conversation_id}] meeting date {dropped!r} dropped — the source "
                         "never gives it as this meeting's date")

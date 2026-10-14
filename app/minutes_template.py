@@ -168,7 +168,7 @@ def context(mom: Dict[str, Any], meta: Optional[Dict[str, Any]] = None, pages: i
 
     actions = [a for a in (mom.get("action_items") or []) if isinstance(a, dict) and _clean(a.get("task"))]
     chairman = next((a["name"] for a in attendees if a["label"] == "Chairman"), MISSING)
-    return {
+    ctx = {
         "draft": bool(meta.get("draft")),
         "classification": grade, "pages_shown": grade in dx._PAGES_SHOWN,
         "page_count": str(pages), "page_count_word": dx._WORDS[min(pages, 9)].capitalize(),
@@ -204,6 +204,38 @@ def context(mom: Dict[str, Any], meta: Optional[Dict[str, Any]] = None, pages: i
                         or [{"task": MISSING, "owner": MISSING, "due": MISSING}],
         "chairman": chairman,
     }
+    return _with_form_slots(ctx, meta)
+
+
+# The built-in slot each header field fills, so a template may also name it the way a form asks for it:
+# {{ file_reference_number }}, {{ telephone_number }}, {{ subject }} … (header_fields.ALIASES).
+_SLOT_OF = {"file_ref": "file_reference", "telephone": "telephone", "issue_date": "date_of_issue", "venue": "venue",
+            "meeting_date": "meeting_date", "meeting_time": "meeting_time", "address": "address",
+            "classification": "classification", "precedence": "precedence", "copy_no": "copy_no",
+            "amendments_by": "amendments_by", "secretary_name": "secretary_name", "secretary_rank": "secretary_rank",
+            "title": "meeting_title"}
+
+
+def _with_form_slots(ctx: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The context plus every questionnaire answer under its own slot name ("file reference number" →
+    {{ file_reference_number }}), and every header field under each name a form uses for it. A built-in slot is
+    never replaced: its value is already the right one by priority (header_fields).
+
+    Every answer is also in {{ questionnaire["<the question as asked>"] }}, for a question whose slot name is
+    taken by a built-in one ("Agenda", "Summary") or is no name at all ("1. File no", "S/No")."""
+    from header_fields import ALIASES, slot_name, slots
+    answers = meta.get("fields") if isinstance(meta.get("fields"), dict) else {}
+    ctx["questionnaire"] = {q: _clean(a) or MISSING for q, a in answers.items()}
+    for field, slot in _SLOT_OF.items():
+        value = ctx.get(slot)
+        text = ", ".join(value) if isinstance(value, list) else value if isinstance(value, str) else ""
+        if field == "classification" and not text and _clean(meta.get("classification")):
+            text = "UNCLASSIFIED"                      # given as unclassified: the built-in slot stays empty
+        for alias in ALIASES.get(field, []):
+            ctx.setdefault(slot_name(alias), text or MISSING)
+    for slot, answer in slots(answers).items():
+        ctx.setdefault(slot, _clean(answer) or MISSING)
+    return ctx
 
 
 def is_fillable(data: bytes) -> bool:

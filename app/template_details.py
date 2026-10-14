@@ -75,8 +75,10 @@ def jssd_anchors(text: str) -> List[str]:
 _SPECIMEN = re.compile(
     r"telephone\s+number\s+here|address\s+line|file\s+number\s+comes\s+here|number\s+of\s+pages|"
     r"\bxx\s*/\s*yy\b|rank\s+and\s+name|\baddressee\s*\d+\b|place\s+here|security\s+classification|"
-    r"\bun\s*decorated\b|appointment\s+of|comes\s+here|\bnumber\s+here\b|\bnagin\s+range\b|"
-    r"\bfiring\s+practice\b", re.I)
+    r"\bun\s*decorated\b|appointment\s+of|comes\s+here|\bnumber\s+here\b", re.I)
+# The specimen's own MEETING ("4. Nagin Range …", "FIRING PRACTICE"): a sign of a specimen in a template, but real
+# words in a prompt or a meeting document — a range, a meeting's subject — so is_placeholder() leaves them alone.
+_SPECIMEN_CONTENT = re.compile(r"\bnagin\s+range\b|\bfiring\s+practice\b", re.I)
 _FILLER = re.compile(r"\.{4,}|…{2,}|_{3,}|-{4,}")
 _ONLY_PUNCT = re.compile(r"^[\s.…,;:\-–—_()'\"/|]*$")
 _WHOLE_WORD_PLACEHOLDERS = {"appointment", "date", "dt", "dt date", "precedence", "copy no", "rank", "name",
@@ -87,11 +89,17 @@ _WHOLE_WORD_PLACEHOLDERS = {"appointment", "date", "dt", "dt date", "precedence"
 _SPECIMEN_WORD = re.compile(r"\bspecimen\b", re.I)
 
 
-def is_specimen(value: str) -> bool:
+def is_placeholder(value: str) -> bool:
+    """Instruction text standing where a value goes: "Telephone number here", "xx/yy", a dotted line."""
     v = re.sub(r"\s+", " ", (value or "")).strip()
     if not v or _ONLY_PUNCT.match(v):
         return True
     return bool(_SPECIMEN.search(v) or _FILLER.search(v) or v.lower().strip(".:") in _WHOLE_WORD_PLACEHOLDERS)
+
+
+def is_specimen(value: str) -> bool:
+    """A placeholder, or the Appendix AD specimen's own meeting — for values read from a template."""
+    return is_placeholder(value) or bool(_SPECIMEN_CONTENT.search(value or ""))
 
 
 # ── grounding ────────────────────────────────────────────────────────────────────────────────────
@@ -278,26 +286,8 @@ def validate(raw: Dict[str, Any], template_text: str) -> Tuple[Dict[str, Any], L
     return out, dropped
 
 
-# ── merging into the job's details ───────────────────────────────────────────────────────────────
-STANDING_FIELDS = ("telephone", "address", "file_ref", "secretary", "distribution")
-
-
-def merge(job_meta: Dict[str, Any], template: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-    """The job's own mom_meta wins, field by field; the template fills only what the job left empty.
-
-    Returns (meta for the renderer, the fields that came from the template).
-    """
-    meta = dict(job_meta or {})
-    used = []
-    for k in STANDING_FIELDS:
-        if k not in template:
-            continue
-        mine = meta.get(k)
-        empty = (not mine) or (k == "secretary" and isinstance(mine, dict) and not str(mine.get("name") or "").strip())
-        if empty:
-            meta[k] = template[k]
-            used.append(k)
-    return meta, used
+# Merging into the job's details: header_fields.merge — the template comes last, after the job's own values, the
+# prompt, earlier messages and the documents.
 
 
 # ── orchestration ────────────────────────────────────────────────────────────────────────────────

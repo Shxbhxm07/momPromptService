@@ -9,6 +9,7 @@ the very same object — while the acknowledgement is camelCase throughout (tena
 compareMode). Reading both spellings costs one helper and removes a whole class of silent
 mis-wiring, where a renamed field simply arrives as None and the job processes the wrong thing.
 """
+import json
 import os
 import re
 import unicodedata
@@ -52,6 +53,10 @@ class KafkaJob:
     # distribution list — and the layout still comes from the manual. See template_details.py.
     template_url: str = ""
     template_name: str = ""
+    # The backend's FORM — question → answer, in the order asked — the same `questionnaire` the correspondence
+    # service takes: [{"question": "file reference number", "answer": "AMCID12323"}]. Its answers are the job's own
+    # header values and beat the prompt and the documents; every answer is also a template slot. See header_fields.
+    questionnaire: Dict[str, str] = field(default_factory=dict)
     # The backend's own fields, kept EXACTLY as they arrived (same value, same type) so the ack can
     # hand them back untouched. Never parsed, never normalised — `accessVar` in particular is an
     # opaque credential-shaped string and `isUser` is a boolean the backend may also send as text.
@@ -92,6 +97,7 @@ _INPUT_FIELDS = frozenset({
     "file_fids", "fileFids", "fIds", "tenant_id", "conversation_id", "compare_mode", "mode",
     "momMode", "mom_mode", "requestType", "request_type",
     "mom_meta", "momMeta", "template_url", "templateUrl", "template_name", "templateName",
+    "documents", "questionnaire", "questionaire", "questionnaires",
 })
 # 2. The RESULT — the only fields the service writes. A value the job itself carried for one of
 #    these (a resent ack, say) is ignored, never echoed as if it were the outcome.
@@ -126,17 +132,76 @@ def _looks_like_a_file(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower().endswith(_READABLE_EXTENSIONS)
 
 
-def _paths(msg: Dict[str, Any]) -> List[str]:
+def _paths(msg: Dict[str, Any], use_path: bool = True) -> List[str]:
     """The documents to read, from `file_urls`, or from `path` when it names a readable file.
 
     Blank entries are skipped: a caller filling a fixed-size list sends "" for the unused slot, and
     "" as a MinIO key fails on a confusing error.
     """
     urls = [u for u in (_get(msg, "file_urls", "fileUrls", default=[]) or []) if isinstance(u, str) and u.strip()]
-    if urls:
+    if urls or not use_path:
         return urls
     single = _get(msg, "path", default="")
     return [single.strip()] if _looks_like_a_file(single) else []
+
+
+def _documents(msg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The `documents` list, the correspondence service's shape: [{"fid", "miniourl", "fileName"}, …].
+
+    `miniourl` is a MinIO key ("corr-files-upload/livetest-ask-feb0b19043.docx"), read like a file_urls entry —
+    the same rule decides whether it is an upload or a repository file. An entry with only a `fid` is a repository
+    file, read from the repository index like a file_fids entry.
+    """
+    docs = _get(msg, "documents", default=[])
+    out = []
+    for d in docs if isinstance(docs, list) else []:
+        if not isinstance(d, dict):
+            continue
+        url = str(_get(d, "miniourl", "minioUrl", "minio_url", "miniOUrl", default="") or "").strip()
+        fid = str(_get(d, "fid", "fId", "fileId", "file_id", default="") or "").strip()
+        name = str(_get(d, "fileName", "file_name", "filename", "name", default="") or "").strip()
+        if url or fid:
+            out.append({"url": url, "fid": fid, "name": name})
+    return out
+
+
+def _questionnaire(msg: Dict[str, Any]) -> Dict[str, str]:
+    """question → answer, from [{"question": …, "answer": …}, …] or a plain {question: answer}. Questions or answers
+    left blank are skipped; a question asked twice keeps its last answer. JSON sent as text is read too."""
+    q = _get(msg, "questionnaire", "questionaire", "questionnaires", default=None)
+    if isinstance(q, str):
+        try:
+            q = json.loads(q)
+        except ValueError:
+            q = None
+    if isinstance(q, dict):
+        pairs = list(q.items())
+    elif isinstance(q, list):
+        items = [{str(k).strip().lower(): v for k, v in d.items()} for d in q if isinstance(d, dict)]
+        pairs = [(d.get("question"), d.get("answer")) for d in items]
+    else:
+        pairs = []
+    out: Dict[str, str] = {}
+    for question, answer in pairs:
+        question = " ".join(str(question if question is not None else "").split())
+        answer = _answer_text(answer)
+        if question and answer:
+            out[question] = answer
+    return out
+
+
+def _answer_text(answer: Any) -> str:
+    """An answer of any JSON type as the text the minutes print: a list as "a ; b", a yes/no box as Yes/No, an
+    object as "key: value; …", null as nothing."""
+    if answer is None:
+        return ""
+    if isinstance(answer, bool):
+        return "Yes" if answer else "No"
+    if isinstance(answer, list):
+        return " ; ".join(t for t in (_answer_text(a) for a in answer) if t)
+    if isinstance(answer, dict):
+        return "; ".join(f"{k}: {t}" for k, t in ((k, _answer_text(v)) for k, v in answer.items()) if t)
+    return str(answer).strip()
 
 
 def _names(msg: Dict[str, Any]) -> List[str]:
@@ -155,6 +220,20 @@ def _names(msg: Dict[str, Any]) -> List[str]:
 
 
 def parse_job(msg: Dict[str, Any]) -> KafkaJob:
+    # `documents` adds to file_urls / file_fids, after them. With documents, `path` is never a file: it is the
+    # backend's own field ("AsItIs"), and the documents say what to read.
+    docs = _documents(msg)
+    urls = _paths(msg, use_path=not docs)
+    fids = list(_get(msg, "file_fids", "fileFids", "fIds", default=[]) or [])
+    names = _names(msg)
+    if docs:
+        names = names[:len(urls)] + [""] * (len(urls) - len(names))   # one name per file_urls entry, then theirs
+        for d in docs:
+            if d["url"] and d["url"] not in urls:
+                urls.append(d["url"])
+                names.append(d["name"])
+            elif not d["url"] and d["fid"] not in fids:
+                fids.append(d["fid"])
     return KafkaJob(
         tenant_id=_get(msg, "tenant_id", "tenantId", default="") or "",
         user_id=_get(msg, "userId", "user_id", default="") or "",
@@ -162,13 +241,14 @@ def parse_job(msg: Dict[str, Any]) -> KafkaJob:
         mode=_get(msg, "mode", "momMode", "mom_mode", "requestType", "request_type", default="") or "",
         compare_mode=_get(msg, "compare_mode", "compareMode", default="") or "",
         document_ids=list(_get(msg, "document_ids", "documentIds", default=[]) or []),
-        file_urls=_paths(msg),
-        file_fids=list(_get(msg, "file_fids", "fileFids", "fIds", default=[]) or []),
-        document_names=_names(msg),
+        file_urls=urls,
+        file_fids=fids,
+        document_names=names,
         prompt=str(_get(msg, "prompt", default="") or "").strip(),
         mom_meta=_dict(_get(msg, "mom_meta", "momMeta", default={})),
         template_url=str(_get(msg, "template_url", "templateUrl", default="") or "").strip(),
         template_name=str(_get(msg, "template_name", "templateName", default="") or "").strip(),
+        questionnaire=_questionnaire(msg),
         echo={k: v for k, v in msg.items() if k not in _INPUT_FIELDS and k not in _RESULT_FIELDS},
         raw=msg,
     )

@@ -49,6 +49,8 @@ running after 30 minutes. For routine testing, keep files under about 15,000 cha
 | `conversationId` | yes | use a new one per test; it names the Elasticsearch record |
 | `document_ids` | yes | comes back as `fileIds` |
 | `tenant_id` | yes | the Word file is stored under `<tenant_id>/summaries/` |
+| `documents` | no | the files, as the correspondence service takes them: `[{"fid": "…", "miniourl": "bucket/path/file.docx", "fileName": "…"}]`. `miniourl` is read like a `file_urls` entry; an entry with only a `fid` is read from the repository |
+| `questionnaire` | no | the form's answers: `[{"question": "file reference number", "answer": "AMCID12323"}]`. They **beat the prompt, and the prompt beats the documents** — see *Header details by priority* |
 | `mom_meta` | no | the JSSD header details: classification, file reference, venue, secretary, distribution… |
 | `template_url` | no | MinIO path of the HQ's official JSSD template (DOCX, DOC, PDF or TXT), e.g. `mom/templates/hq.docx` |
 | `template_name` | no | the template's file name, shown in logs and Elasticsearch |
@@ -148,8 +150,50 @@ template that cannot be filled (a broken tag) falls back to the default layout; 
 | `{{ classification }}` `{{ page_count_text }}` `{{ draft }}` | head and foot of every page; "(Five pages)" on page 1 for CONFIDENTIAL and above |
 | `{{ purpose }}` `{{ summary }}` `{{ chairman }}`, lists `agenda` `key_points` `key_figures` `decisions`, `action_items[ task, owner, due ]` | the raw values, for a layout different from Appendix AD |
 
+**Questionnaire answers are slots too.** Every answer fills a slot named after its question, in lower case with
+`_` for spaces: "file reference number" → `{{ file_reference_number }}`, "Officer in charge" →
+`{{ officer_in_charge }}`. The header fields also answer to the names a form uses for them, wherever their value
+came from: `{{ file_reference_number }}`, `{{ telephone_number }}`, `{{ subject }}`, `{{ place_of_meeting }}` …
+(all of them: `ALIASES` in `app/header_fields.py`). A slot nobody filled prints `xxx...xxx`.
+
+Any answer can also be reached by its question exactly as asked: `{{ questionnaire["Agenda"] }}` — needed when the
+question's slot name is taken by a built-in one (Agenda, Summary, Items, Attendees…) or is no name at all
+("1. File no"). `{% for q, a in questionnaire.items() %}{{ q }}: {{ a }}{% endfor %}` prints every answer, in order.
+Hindi questions work the same way: "फ़ॉर्म संख्या" → `{{ फ़ॉर्म_संख्या }}` (or without the nukta, `{{ फॉर्म_संख्या }}`).
+Answers of any type are printed as text: a number as written, true/false as Yes/No, a list as `a ; b`, an object as
+`key: value; …`. Empty answers and empty questions are skipped; a question asked twice keeps its last answer, and
+so does a field asked twice in different words ("File No", then "फ़ाइल संख्या").
+
 Rebuild the default after changing its generator: `tools/make_minutes_template.py` (it uses the renderer's
 own measurements, so a hand edit in Word and a regenerated file both work).
+
+## Header details by priority (since 2026-10-14)
+
+A detail given in more than one place is taken from the first of these that has it:
+
+1. the job's **`questionnaire`**, then its **`mom_meta`**
+2. the user's **prompt**
+3. what the user gave in **earlier messages** of the same conversation
+4. the attached **documents** — only the issuing office's telephone, address, file reference, secretary and
+   distribution; a source document's own date, copy number or classification are not the minutes'
+5. the **template**'s standing details
+
+The prompt and the documents are read by a short model call each, beside the minutes writer. A value is kept only
+when it is written in that text, so nothing is invented; a classification only as the one grade the prompt names.
+
+A question is matched to a field by its wording, typos included ("file refernce number" works). Questions it
+matches: file reference (number / no), telephone (number), date of issue, venue / place, meeting date / date,
+meeting time / time, address, classification, precedence, copy number, amendments by, secretary, secretary rank,
+distribution, and title / subject. Any other question is a template slot only.
+
+A follow-up message whose questionnaire changes an answer changes the minutes (no prompt needed), and the form wins
+over a change asked in the same message's prompt.
+
+```json
+"documents": [{"fid": "ikjhbvfghj", "miniourl": "corr-files-upload/livetest-ask-feb0b19043.docx", "fileName": "notes.docx"}],
+"questionnaire": [{"question": "file reference number", "answer": "AMCID12323"},
+                  {"question": "Telephone number", "answer": "1334675"}]
+```
 
 ## Testing the template feature
 

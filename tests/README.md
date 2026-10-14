@@ -12,6 +12,8 @@ each model answer is a stand-in that makes the mistakes the real model made on t
 | `t_group.py` | ITEM grouping: plain-line replies, separate calls, decisions and figures placed by matching |
 | `t_limits.py` | no size limits: long text read in parts with nothing lost, every scanned page read, big MoMs re-promptable |
 | `t_speed.py` | faster, same minutes: 1 vs 8 calls at a time give identical minutes; the gate; parallel OCR; "Try again" joins |
+| `t_questionnaire.py` | `documents` + `questionnaire` in the job; header by priority (form → prompt → documents); form answers as template slots; form changes in follow-ups |
+| `t_service.py` | **the service end to end** through FastAPI and the Kafka message path, with ANY questions (odd wordings, typos, Hindi, numbers, yes/no, lists, objects, `&<>`, built-in names); opens every Word file it stores. MinIO, Elasticsearch and the model are stand-ins; the Word files are left in `<temp>/mom_t_service` to look at |
 | `fake_model.py` | the stand-in model for `t_speed.py`: same question → same answer, with a delay like the real one |
 
 `t_limits.py` and `t_speed.py` also use the scanned PDFs and long texts in the repo folder (`scanned-transcripts/`,
